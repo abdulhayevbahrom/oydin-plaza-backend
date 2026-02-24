@@ -11,6 +11,7 @@ const router = require("./routes/router");
 
 const authMiddleware = require("./middleware/AuthMiddleware");
 const { createServer } = require("node:http");
+const { startGuestBillingCron } = require("./jobs/guestBilling.cron");
 
 const soket = require("./socket");
 
@@ -23,7 +24,7 @@ app.use(express.json());
 
 // CORS sozlamalari
 const corsOptions = {
-  origin: ["http://localhost:5173"],
+  origin: ["http://localhost:5173", "https://oydin-plaza.vercel.app"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   credentials: true,
 };
@@ -37,6 +38,7 @@ mongoose.plugin(applyTimezone);
 // Socket.IO sozlamalari
 app.set("socket", io);
 soket.connect(io);
+startGuestBillingCron(io);
 
 app.use("/api", authMiddleware, router); // Routerlarni ulash
 app.get("/", (req, res) => res.send("Salom dunyo")); // Bosh sahifa
