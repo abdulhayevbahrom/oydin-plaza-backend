@@ -12,6 +12,11 @@ const {
   roomIdParamsSchema,
 } = require("../validations/room.validation");
 const {
+  createExpenseSchema,
+  updateExpenseSchema,
+  expenseIdParamsSchema,
+} = require("../validations/expense.validation");
+const {
   createEmployee,
   getEmployees,
   getEmployeeById,
@@ -26,6 +31,12 @@ const {
   updateRoom,
   deleteRoom,
 } = require("../controllers/room.controller");
+const {
+  createExpense,
+  getExpenses,
+  updateExpense,
+  deleteExpense,
+} = require("../controllers/expense.controller");
 const {
   createGuestSchema,
   updateGuestSchema,
@@ -77,6 +88,19 @@ router.put(
   updateRoom,
 );
 router.delete("/room/:id", validate(roomIdParamsSchema, "params"), deleteRoom);
+router.post("/expense", validate(createExpenseSchema), createExpense);
+router.get("/expenses", getExpenses);
+router.put(
+  "/expense/:id",
+  validate(expenseIdParamsSchema, "params"),
+  validate(updateExpenseSchema),
+  updateExpense,
+);
+router.delete(
+  "/expense/:id",
+  validate(expenseIdParamsSchema, "params"),
+  deleteExpense,
+);
 router.post("/guest", validate(createGuestSchema), createGuest);
 router.get("/guests", getGuests);
 router.get("/vip-requests", getVipRequests);

@@ -7,6 +7,21 @@ const ajv = new Ajv({
   useDefaults: true,
   coerceTypes: true,
 });
+try {
+  // ajv-formats o'rnatilgan bo'lsa date-time kabi formatlarni yoqadi
+  const addFormats = require("ajv-formats");
+  addFormats(ajv);
+} catch (_) {
+  // paket o'rnatilmagan bo'lsa ham validatsiya ishlayveradi
+}
+
+try {
+  // ajv-errors bo'lsa schema ichida errorMessage ishlatish mumkin bo'ladi
+  const ajvErrors = require("ajv-errors");
+  ajvErrors(ajv);
+} catch (_) {
+  // paket o'rnatilmagan bo'lsa default xatolar ishlaydi
+}
 
 const formatError = (error) => {
   const field = error.instancePath ? error.instancePath.replace("/", "") : "";
