@@ -1,20 +1,36 @@
 const Expense = require("../model/Expense");
+const Employee = require("../model/Employee");
 const response = require("../utils/response");
 
 const normalizeCategory = (value) => String(value || "").trim();
 
-const buildCreatedBy = (user) => ({
-  userId: String(user?.id || ""),
-  role: String(user?.role || ""),
-  login: String(user?.login || ""),
-});
+const buildCreatedBy = async (user) => {
+  const actor = {
+    userId: String(user?.id || ""),
+    role: String(user?.role || ""),
+    login: String(user?.login || ""),
+    firstname: "",
+    lastname: "",
+  };
+
+  if (!actor.userId) return actor;
+
+  const employee = await Employee.findById(actor.userId)
+    .select("firstname lastname")
+    .lean();
+
+  actor.firstname = String(employee?.firstname || "");
+  actor.lastname = String(employee?.lastname || "");
+
+  return actor;
+};
 
 const createExpense = async (req, res) => {
   try {
     const payload = { ...req.body };
     payload.category = normalizeCategory(payload.category);
     if (payload.spentAt) payload.spentAt = new Date(payload.spentAt);
-    payload.createdBy = buildCreatedBy(req.admin);
+    payload.createdBy = await buildCreatedBy(req.admin);
 
     const expense = await Expense.create(payload);
     return response.created(res, "Xarajat muvaffaqiyatli qo'shildi", expense);

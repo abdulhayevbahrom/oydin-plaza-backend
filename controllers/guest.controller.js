@@ -1,17 +1,32 @@
 const Guest = require("../model/Guest");
 const Room = require("../model/Room");
 const VipRequest = require("../model/VipRequest");
+const Employee = require("../model/Employee");
 const response = require("../utils/response");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const buildActionBy = (user) => {
+const buildActionBy = async (user) => {
   if (!user) return null;
-  return {
+
+  const action = {
     userId: String(user.id || ""),
     role: String(user.role || ""),
     login: String(user.login || ""),
+    firstname: "",
+    lastname: "",
   };
+
+  if (!action.userId) return action;
+
+  const employee = await Employee.findById(action.userId)
+    .select("firstname lastname")
+    .lean();
+
+  action.firstname = String(employee?.firstname || "");
+  action.lastname = String(employee?.lastname || "");
+
+  return action;
 };
 
 const canManageVip = (user) => {
@@ -141,7 +156,7 @@ const createGuest = async (req, res) => {
     );
 
     const isVipRequested = Boolean(vip);
-    const acceptedBy = buildActionBy(req.admin);
+    const acceptedBy = await buildActionBy(req.admin);
 
     const guest = await Guest.create({
       firstname,
@@ -468,7 +483,7 @@ const updateGuest = async (req, res) => {
     }
 
     if (wantsVipRequest && !guest.vip && guest.vipRequestStatus !== "pending") {
-      const requestedBy = buildActionBy(req.admin);
+      const requestedBy = await buildActionBy(req.admin);
       guest.vipRequestStatus = "pending";
       guest.vipRequestedBy = requestedBy;
 
@@ -578,7 +593,7 @@ const decideVipRequest = async (req, res) => {
     const guest = await Guest.findById(request.guest);
     if (!guest) return response.notFound(res, "Bog'langan mehmon topilmadi");
 
-    const decisionBy = buildActionBy(req.admin);
+    const decisionBy = await buildActionBy(req.admin);
     request.status = action === "approve" ? "approved" : "rejected";
     request.decidedBy = decisionBy;
     request.decidedAt = new Date();
@@ -676,7 +691,7 @@ const checkoutGuest = async (req, res) => {
     await syncGuestBilling(guest);
 
     guest.status = "checked_out";
-    guest.checkoutBy = buildActionBy(req.admin);
+    guest.checkoutBy = await buildActionBy(req.admin);
     guest.checkOutAt = new Date();
     await guest.save();
 

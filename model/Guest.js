@@ -21,6 +21,8 @@ const actionBySchema = new mongoose.Schema(
     userId: { type: String, default: "" },
     role: { type: String, default: "" },
     login: { type: String, default: "" },
+    firstname: { type: String, default: "" },
+    lastname: { type: String, default: "" },
   },
   { _id: false },
 );
