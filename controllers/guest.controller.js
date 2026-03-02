@@ -139,6 +139,21 @@ const createGuest = async (req, res) => {
       note = "",
     } = req.body;
 
+    const normalizedPassport = String(passport || "").trim();
+    const blacklistedGuest = await Guest.findOne({
+      passport: {
+        $regex: `^${escapeRegex(normalizedPassport)}$`,
+        $options: "i",
+      },
+      isBlacklisted: true,
+    }).select("_id firstname lastname passport");
+    if (blacklistedGuest) {
+      return response.error(
+        res,
+        "Bu mijoz qora ro'yxatda. Mijozni qabul qilish mumkin emas",
+      );
+    }
+
     const roomDoc = await Room.findById(room);
     if (!roomDoc) return response.notFound(res, "Xona topilmadi");
 
@@ -161,7 +176,7 @@ const createGuest = async (req, res) => {
     const guest = await Guest.create({
       firstname,
       lastname,
-      passport,
+      passport: normalizedPassport,
       birthDate,
       phone: String(phone || "").trim(),
       guestType,
@@ -446,7 +461,7 @@ const getGuestByPassport = async (req, res) => {
       passport: { $regex: `^${escapeRegex(passport)}$`, $options: "i" },
     })
       .sort({ createdAt: -1 })
-      .select("firstname lastname phone birthDate passport");
+      .select("firstname lastname phone birthDate passport isBlacklisted");
 
     if (!guest)
       return response.notFound(res, "Passport bo'yicha mehmon topilmadi");
