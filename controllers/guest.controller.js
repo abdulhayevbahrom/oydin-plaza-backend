@@ -3,6 +3,10 @@ const Room = require("../model/Room");
 const VipRequest = require("../model/VipRequest");
 const Employee = require("../model/Employee");
 const response = require("../utils/response");
+const {
+  getHotelSettings,
+  applyTimeToDate,
+} = require("../utils/hotelSettings");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,15 +41,24 @@ const canManageVip = (user) => {
 const escapeRegex = (value) =>
   String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const buildBillingState = (checkInAt, stayDays, now = new Date()) => {
+const buildBillingState = (
+  checkInAt,
+  stayDays,
+  now = new Date(),
+  hotelSettings = {},
+) => {
   const safeStayDays = Math.max(Number(stayDays || 1), 1);
 
-  const checkoutDueAt = new Date(checkInAt);
-  checkoutDueAt.setHours(15, 0, 0, 0);
+  const checkoutDueAt = applyTimeToDate(
+    checkInAt,
+    hotelSettings.checkoutTime || "15:00",
+  );
   checkoutDueAt.setDate(checkoutDueAt.getDate() + safeStayDays);
 
-  const checkoutReminderAt = new Date(checkoutDueAt);
-  checkoutReminderAt.setHours(12, 0, 0, 0);
+  const checkoutReminderAt = applyTimeToDate(
+    checkoutDueAt,
+    hotelSettings.reminderTime || "12:00",
+  );
 
   const overdueMs = now.getTime() - checkoutDueAt.getTime();
   const extraDays = overdueMs > 0 ? Math.floor(overdueMs / DAY_MS) + 1 : 0;
@@ -73,10 +86,20 @@ const recalcAmounts = (guest) => {
   guest.debtAmount = Math.max(total - paid, 0);
 };
 
-const syncGuestBilling = async (guest, now = new Date()) => {
+const syncGuestBilling = async (
+  guest,
+  now = new Date(),
+  hotelSettings = null,
+) => {
   if (!guest || guest.status !== "active") return false;
+  const settings = hotelSettings || (await getHotelSettings());
 
-  const billing = buildBillingState(guest.checkInAt, guest.stayDays, now);
+  const billing = buildBillingState(
+    guest.checkInAt,
+    guest.stayDays,
+    now,
+    settings,
+  );
   const nextTotalAmount =
     Number(guest.dailyRate || 0) * Number(billing.billableDays || 1);
 
@@ -102,10 +125,11 @@ const syncGuestBilling = async (guest, now = new Date()) => {
 };
 
 const syncAllActiveGuestsBilling = async () => {
+  const hotelSettings = await getHotelSettings();
   const activeGuests = await Guest.find({ status: "active" });
   for (const guest of activeGuests) {
     // eslint-disable-next-line no-await-in-loop
-    await syncGuestBilling(guest);
+    await syncGuestBilling(guest, new Date(), hotelSettings);
   }
 };
 
@@ -162,12 +186,14 @@ const createGuest = async (req, res) => {
       return response.error(res, "Xonada bo'sh joy yo'q");
     }
 
+    const hotelSettings = await getHotelSettings();
     const normalizedDailyRate = Number(dailyRate || 0);
     const normalizedStayDays = Math.max(Number(stayDays || 1), 1);
     const billing = buildBillingState(
       new Date(),
       normalizedStayDays,
       new Date(),
+      hotelSettings,
     );
 
     const isVipRequested = Boolean(vip);
@@ -375,15 +401,13 @@ const buildGuestsPipeline = ({
 };
 
 const attachGuestRuntimeFlags = (guest) => {
-  const runtime = buildBillingState(
-    guest.checkInAt,
-    guest.stayDays,
-    new Date(),
-  );
+  const now = Date.now();
+  const checkoutReminderAt = new Date(guest.checkoutReminderAt || 0).getTime();
+  const checkoutDueAt = new Date(guest.checkoutDueAt || 0).getTime();
   return {
     ...guest,
-    isCheckoutReminderTime: runtime.isCheckoutReminderTime,
-    isCheckoutOverdue: runtime.isCheckoutOverdue,
+    isCheckoutReminderTime: now >= checkoutReminderAt && now < checkoutDueAt,
+    isCheckoutOverdue: checkoutDueAt > 0 && now > checkoutDueAt,
   };
 };
 

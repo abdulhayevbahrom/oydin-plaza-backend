@@ -1,19 +1,33 @@
 const moment = require("moment-timezone");
 const Guest = require("../model/Guest");
+const {
+  applyTimeToDate,
+  getHotelSettings,
+  parseTime,
+} = require("../utils/hotelSettings");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Tashkent";
 
 // Mijozning billing holatini joriy vaqtga nisbatan hisoblaydi
-const buildBillingState = (checkInAt, stayDays, now = new Date()) => {
+const buildBillingState = (
+  checkInAt,
+  stayDays,
+  now = new Date(),
+  hotelSettings = {},
+) => {
   const safeStayDays = Math.max(Number(stayDays || 1), 1);
 
-  const checkoutDueAt = new Date(checkInAt);
-  checkoutDueAt.setHours(15, 0, 0, 0);
+  const checkoutDueAt = applyTimeToDate(
+    checkInAt,
+    hotelSettings.checkoutTime || "15:00",
+  );
   checkoutDueAt.setDate(checkoutDueAt.getDate() + safeStayDays);
 
-  const checkoutReminderAt = new Date(checkoutDueAt);
-  checkoutReminderAt.setHours(12, 0, 0, 0);
+  const checkoutReminderAt = applyTimeToDate(
+    checkoutDueAt,
+    hotelSettings.reminderTime || "12:00",
+  );
 
   const overdueMs = now.getTime() - checkoutDueAt.getTime();
   const extraDays = overdueMs > 0 ? Math.floor(overdueMs / DAY_MS) + 1 : 0;
@@ -38,13 +52,19 @@ const recalcAmounts = (guest) => {
   guest.debtAmount = Math.max(total - paid, 0);
 };
 
-// 15:00 cron: active mijozlarning o'tib ketgan kunlarini avtomatik oshiradi
+// Sozlamadagi checkout vaqtida active mijozlarning o'tib ketgan kunlarini avtomatik oshiradi
 const runOverdueBillingJob = async () => {
   const now = new Date();
+  const hotelSettings = await getHotelSettings();
   const guests = await Guest.find({ status: "active" });
 
   for (const guest of guests) {
-    const billing = buildBillingState(guest.checkInAt, guest.stayDays, now);
+    const billing = buildBillingState(
+      guest.checkInAt,
+      guest.stayDays,
+      now,
+      hotelSettings,
+    );
     const nextTotalAmount =
       Number(guest.dailyRate || 0) * Number(billing.billableDays || 1);
 
@@ -68,18 +88,12 @@ const runOverdueBillingJob = async () => {
   }
 };
 
-// 12:00 cron: ogohlantirish kerak bo'lgan active mijozlarni socketga yuboradi
-const runReminderJob = async (io) => {
+// Sozlamadagi ogohlantirish vaqtida active mijozlarni socketga yuboradi
+const runReminderJob = async (io, targetDate) => {
   if (!io) return;
 
-  const nowTz = moment().tz(APP_TIMEZONE);
-  const start = nowTz
-    .clone()
-    .startOf("day")
-    .hour(12)
-    .minute(0)
-    .second(0)
-    .millisecond(0);
+  const nowTz = targetDate ? moment(targetDate).tz(APP_TIMEZONE) : moment().tz(APP_TIMEZONE);
+  const start = nowTz.clone().startOf("minute");
   const end = start.clone().add(1, "minute");
 
   const guests = await Guest.find({
@@ -106,7 +120,7 @@ const runReminderJob = async (io) => {
   });
 };
 
-// Har daqiqada tekshiradi va 12:00 hamda 15:00 vazifalarini bir martadan ishga tushiradi
+// Har daqiqada tekshiradi va sozlamadagi vaqtlar bo'yicha vazifalarni bir martadan ishga tushiradi
 const startGuestBillingCron = (io) => {
   const state = {
     reminderKey: "",
@@ -119,17 +133,20 @@ const startGuestBillingCron = (io) => {
       const dayKey = nowTz.format("YYYY-MM-DD");
       const hour = nowTz.hour();
       const minute = nowTz.minute();
+      const hotelSettings = await getHotelSettings();
+      const reminder = parseTime(hotelSettings.reminderTime);
+      const checkout = parseTime(hotelSettings.checkoutTime);
 
-      if (hour === 12 && minute === 0) {
-        const reminderKey = `${dayKey}-12`;
+      if (hour === reminder.hour && minute === reminder.minute) {
+        const reminderKey = `${dayKey}-${hotelSettings.reminderTime}`;
         if (state.reminderKey !== reminderKey) {
           state.reminderKey = reminderKey;
-          await runReminderJob(io);
+          await runReminderJob(io, nowTz.toDate());
         }
       }
 
-      if (hour === 15 && minute === 0) {
-        const overdueKey = `${dayKey}-15`;
+      if (hour === checkout.hour && minute === checkout.minute) {
+        const overdueKey = `${dayKey}-${hotelSettings.checkoutTime}`;
         if (state.overdueKey !== overdueKey) {
           state.overdueKey = overdueKey;
           await runOverdueBillingJob();

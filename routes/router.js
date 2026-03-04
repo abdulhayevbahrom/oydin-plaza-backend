@@ -16,6 +16,7 @@ const {
   updateExpenseSchema,
   expenseIdParamsSchema,
 } = require("../validations/expense.validation");
+const { updateSettingsSchema } = require("../validations/setting.validation");
 const {
   createEmployee,
   getEmployees,
@@ -37,6 +38,10 @@ const {
   updateExpense,
   deleteExpense,
 } = require("../controllers/expense.controller");
+const {
+  getSettings,
+  updateSettings,
+} = require("../controllers/setting.controller");
 const {
   createGuestSchema,
   updateGuestSchema,
@@ -101,6 +106,8 @@ router.delete(
   validate(expenseIdParamsSchema, "params"),
   deleteExpense,
 );
+router.get("/settings", getSettings);
+router.put("/settings", validate(updateSettingsSchema), updateSettings);
 router.post("/guest", validate(createGuestSchema), createGuest);
 router.get("/guests", getGuests);
 router.get("/vip-requests", getVipRequests);
