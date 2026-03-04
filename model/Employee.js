@@ -41,6 +41,16 @@ const employeeSchema = new mongoose.Schema(
       type: String,
       select: false,
     },
+    refreshToken: {
+      type: String,
+      select: false,
+      default: "",
+    },
+    tokenVersion: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
     isActive: {
       type: Boolean,
       default: true,

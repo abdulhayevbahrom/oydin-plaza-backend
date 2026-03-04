@@ -5,6 +5,7 @@ const {
   updateEmployeeSchema,
   employeeIdParamsSchema,
   loginEmployeeSchema,
+  refreshTokenSchema,
 } = require("../validations/employee.validation");
 const {
   createRoomSchema,
@@ -24,6 +25,7 @@ const {
   updateEmployee,
   deleteEmployee,
   loginEmployee,
+  refreshEmployeeToken,
 } = require("../controllers/employee.controller");
 const {
   createRoom,
@@ -65,6 +67,11 @@ const {
 } = require("../controllers/guest.controller");
 
 router.post("/employee/login", validate(loginEmployeeSchema), loginEmployee);
+router.post(
+  "/employee/refresh",
+  validate(refreshTokenSchema),
+  refreshEmployeeToken,
+);
 router.post("/employee", validate(createEmployeeSchema), createEmployee);
 router.get("/employees", getEmployees);
 router.get(

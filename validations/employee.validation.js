@@ -70,9 +70,19 @@ const loginEmployeeSchema = {
   },
 };
 
+const refreshTokenSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["refreshToken"],
+  properties: {
+    refreshToken: { type: "string", minLength: 10 },
+  },
+};
+
 module.exports = {
   createEmployeeSchema,
   updateEmployeeSchema,
   employeeIdParamsSchema,
   loginEmployeeSchema,
+  refreshTokenSchema,
 };

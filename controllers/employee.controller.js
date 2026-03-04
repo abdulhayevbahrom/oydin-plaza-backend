@@ -3,6 +3,29 @@ const response = require("../utils/response");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 
+const ACCESS_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "12h";
+const REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
+const REFRESH_SECRET =
+  process.env.JWT_REFRESH_SECRET_KEY || process.env.JWT_SECRET_KEY;
+
+const buildTokenPayload = (employee) => ({
+  id: employee._id,
+  role: String(employee.position || "").toLowerCase().trim(),
+  login: employee.login,
+  sections: employee.sections || [],
+  tv: Number(employee.tokenVersion || 1),
+});
+
+const signAccessToken = (employee) =>
+  jwt.sign(buildTokenPayload(employee), process.env.JWT_SECRET_KEY, {
+    expiresIn: ACCESS_EXPIRES_IN,
+  });
+
+const signRefreshToken = (employee) =>
+  jwt.sign({ id: employee._id, login: employee.login }, REFRESH_SECRET, {
+    expiresIn: REFRESH_EXPIRES_IN,
+  });
+
 const createEmployee = async (req, res) => {
   try {
     const {
@@ -115,10 +138,28 @@ const updateEmployee = async (req, res) => {
       delete updateQuery.password;
     }
 
+    const shouldInvalidateSession =
+      Object.prototype.hasOwnProperty.call(updates, "isActive") &&
+      updates.isActive === false;
+
+    if (shouldInvalidateSession) {
+      updateQuery.tokenVersion = Number(currentEmployee.tokenVersion || 1) + 1;
+      updateQuery.refreshToken = "";
+    }
+
     const employee = await Employee.findByIdAndUpdate(id, updateQuery, {
       new: true,
       runValidators: true,
     });
+
+    if (shouldInvalidateSession) {
+      const io = req.app.get("socket");
+      if (io) {
+        io.to(`user:${id}`).emit("force_logout", {
+          reason: "employee_deactivated",
+        });
+      }
+    }
     return response.success(res, "Hodim yangilandi", employee);
   } catch (error) {
     return response.serverError(res, error.message);
@@ -127,8 +168,17 @@ const updateEmployee = async (req, res) => {
 
 const deleteEmployee = async (req, res) => {
   try {
-    const employee = await Employee.findByIdAndDelete(req.params.id);
+    const employee = await Employee.findById(req.params.id);
     if (!employee) return response.notFound(res, "Hodim topilmadi");
+
+    const io = req.app.get("socket");
+    if (io) {
+      io.to(`user:${employee._id}`).emit("force_logout", {
+        reason: "employee_deleted",
+      });
+    }
+
+    await Employee.findByIdAndDelete(req.params.id);
 
     return response.success(res, "Hodim o'chirildi");
   } catch (error) {
@@ -161,25 +211,60 @@ const loginEmployee = async (req, res) => {
       return response.unauthorized(res, "Login yoki parol noto'g'ri");
 
     const normalizedRole = String(employee.position || "").toLowerCase().trim();
-
-    const token = jwt.sign(
-      {
-        id: employee._id,
-        role: normalizedRole,
-        login: employee.login,
-        sections: employee.sections || [],
-      },
-      process.env.JWT_SECRET_KEY,
-      { expiresIn: "7d" },
-    );
+    const token = signAccessToken(employee);
+    const refreshToken = signRefreshToken(employee);
+    employee.refreshToken = refreshToken;
+    await employee.save();
 
     return response.success(res, "Muvaffaqiyatli kirildi", {
       token,
+      refreshToken,
       user: {
         id: employee._id,
         firstname: employee.firstname,
         lastname: employee.lastname,
         role: normalizedRole,
+        sections: employee.sections || [],
+      },
+    });
+  } catch (error) {
+    return response.serverError(res, error.message);
+  }
+};
+
+const refreshEmployeeToken = async (req, res) => {
+  try {
+    const refreshToken = String(req.body.refreshToken || "").trim();
+    let payload;
+    try {
+      payload = jwt.verify(refreshToken, REFRESH_SECRET);
+    } catch (error) {
+      return response.unauthorized(res, "Refresh token yaroqsiz");
+    }
+
+    const employee = await Employee.findOne({
+      _id: payload?.id,
+      canLogin: true,
+      isActive: true,
+    }).select("+refreshToken");
+
+    if (!employee || employee.refreshToken !== refreshToken) {
+      return response.unauthorized(res, "Refresh token yaroqsiz");
+    }
+
+    const nextAccessToken = signAccessToken(employee);
+    const nextRefreshToken = signRefreshToken(employee);
+    employee.refreshToken = nextRefreshToken;
+    await employee.save();
+
+    return response.success(res, "Token yangilandi", {
+      token: nextAccessToken,
+      refreshToken: nextRefreshToken,
+      user: {
+        id: employee._id,
+        firstname: employee.firstname,
+        lastname: employee.lastname,
+        role: String(employee.position || "").toLowerCase().trim(),
         sections: employee.sections || [],
       },
     });
@@ -195,4 +280,5 @@ module.exports = {
   updateEmployee,
   deleteEmployee,
   loginEmployee,
+  refreshEmployeeToken,
 };
