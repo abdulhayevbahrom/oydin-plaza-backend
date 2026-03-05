@@ -31,7 +31,7 @@ const roomSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["bosh", "band"],
+      enum: ["bosh", "band", "remont"],
       default: "bosh",
     },
     prices: {
@@ -44,7 +44,10 @@ const roomSchema = new mongoose.Schema(
       default: "",
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
+
+roomSchema.index({ floor: 1, roomNumber: 1 });
+roomSchema.index({ floor: 1, category: 1 });
 
 module.exports = mongoose.model("Room", roomSchema);

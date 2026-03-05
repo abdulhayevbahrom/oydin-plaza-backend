@@ -50,9 +50,21 @@ const {
   guestIdParamsSchema,
   guestPassportParamsSchema,
   addPaymentSchema,
+  addGuestServiceSchema,
   vipRequestIdParamsSchema,
   decideVipRequestSchema,
 } = require("../validations/guest.validation");
+const {
+  createServiceSchema,
+  updateServiceSchema,
+  serviceIdParamsSchema,
+} = require("../validations/service.validation");
+const {
+  hallBookingIdParamsSchema,
+  createHallBookingSchema,
+  updateHallBookingSchema,
+  addHallBookingPaymentSchema,
+} = require("../validations/hallBooking.validation");
 const {
   createGuest,
   getGuests,
@@ -62,9 +74,24 @@ const {
   decideVipRequest,
   updateGuest,
   addGuestPayment,
+  addGuestService,
   checkoutGuest,
   deleteGuest,
 } = require("../controllers/guest.controller");
+const {
+  createService,
+  getServices,
+  updateService,
+  deleteService,
+} = require("../controllers/service.controller");
+const {
+  createHallBooking,
+  getHallBookings,
+  updateHallBooking,
+  addHallBookingPayment,
+  cancelHallBooking,
+  deleteHallBooking,
+} = require("../controllers/hallBooking.controller");
 
 router.post("/employee/login", validate(loginEmployeeSchema), loginEmployee);
 router.post(
@@ -115,6 +142,47 @@ router.delete(
 );
 router.get("/settings", getSettings);
 router.put("/settings", validate(updateSettingsSchema), updateSettings);
+router.post("/service", validate(createServiceSchema), createService);
+router.get("/services", getServices);
+router.put(
+  "/service/:id",
+  validate(serviceIdParamsSchema, "params"),
+  validate(updateServiceSchema),
+  updateService,
+);
+router.delete(
+  "/service/:id",
+  validate(serviceIdParamsSchema, "params"),
+  deleteService,
+);
+router.post(
+  "/hall-booking",
+  validate(createHallBookingSchema),
+  createHallBooking,
+);
+router.get("/hall-bookings", getHallBookings);
+router.put(
+  "/hall-booking/:id",
+  validate(hallBookingIdParamsSchema, "params"),
+  validate(updateHallBookingSchema),
+  updateHallBooking,
+);
+router.post(
+  "/hall-booking/:id/payment",
+  validate(hallBookingIdParamsSchema, "params"),
+  validate(addHallBookingPaymentSchema),
+  addHallBookingPayment,
+);
+router.post(
+  "/hall-booking/:id/cancel",
+  validate(hallBookingIdParamsSchema, "params"),
+  cancelHallBooking,
+);
+router.delete(
+  "/hall-booking/:id",
+  validate(hallBookingIdParamsSchema, "params"),
+  deleteHallBooking,
+);
 router.post("/guest", validate(createGuestSchema), createGuest);
 router.get("/guests", getGuests);
 router.get("/vip-requests", getVipRequests);
@@ -141,6 +209,12 @@ router.post(
   validate(guestIdParamsSchema, "params"),
   validate(addPaymentSchema),
   addGuestPayment,
+);
+router.post(
+  "/guest/:id/service",
+  validate(guestIdParamsSchema, "params"),
+  validate(addGuestServiceSchema),
+  addGuestService,
 );
 router.post(
   "/guest/:id/checkout",

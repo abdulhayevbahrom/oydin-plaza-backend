@@ -1,6 +1,7 @@
 const Setting = require("../model/Setting");
 
 const DEFAULT_HOTEL_SETTINGS = {
+  hotelName: "Mehmonxona nomi",
   checkoutTime: "15:00",
   reminderTime: "12:00",
   logo: "",

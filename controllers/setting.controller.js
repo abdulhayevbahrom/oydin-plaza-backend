@@ -18,6 +18,9 @@ const getSettings = async (_, res) => {
 const updateSettings = async (req, res) => {
   try {
     const updates = { ...req.body };
+    if (typeof updates.hotelName === "string") {
+      updates.hotelName = updates.hotelName.trim();
+    }
     if (typeof updates.receiptThankYouText === "string") {
       updates.receiptThankYouText = updates.receiptThankYouText.trim();
     }

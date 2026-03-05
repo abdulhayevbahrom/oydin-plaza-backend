@@ -15,6 +15,27 @@ const paymentSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Mehmon foydalangan qo'shimcha xizmat yozuvi
+const guestServiceSchema = new mongoose.Schema(
+  {
+    serviceId: { type: mongoose.Schema.Types.ObjectId, ref: "Service" },
+    name: { type: String, required: true, trim: true },
+    price: { type: Number, required: true, min: 0 },
+    quantity: { type: Number, required: true, min: 1, default: 1 },
+    totalAmount: { type: Number, required: true, min: 0 },
+    usedAt: { type: Date, default: Date.now },
+    note: { type: String, trim: true, default: "" },
+    createdBy: {
+      userId: { type: String, default: "" },
+      role: { type: String, default: "" },
+      login: { type: String, default: "" },
+      firstname: { type: String, default: "" },
+      lastname: { type: String, default: "" },
+    },
+  },
+  { _id: false },
+);
+
 // Amal bajargan xodim ma'lumoti (qabul, checkout, VIP tasdiq)
 const actionBySchema = new mongoose.Schema(
   {
@@ -62,13 +83,15 @@ const guestSchema = new mongoose.Schema(
     paidAmount: { type: Number, default: 0, min: 0 },
     debtAmount: { type: Number, default: 0, min: 0 },
     payments: { type: [paymentSchema], default: [] },
+    services: { type: [guestServiceSchema], default: [] },
 
     // Holat va kim bajargani
     status: {
       type: String,
-      enum: ["active", "checked_out"],
+      enum: ["booked", "active", "checked_out"],
       default: "active",
     },
+    bookedForAt: { type: Date, default: null },
     acceptedBy: { type: actionBySchema, default: null },
     checkoutBy: { type: actionBySchema, default: null },
     checkInAt: { type: Date, default: Date.now },
@@ -79,5 +102,14 @@ const guestSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// Tezkor list/filter uchun non-unique indekslar
+guestSchema.index({ status: 1, createdAt: -1 });
+guestSchema.index({ status: 1, bookedForAt: 1 });
+guestSchema.index({ status: 1, checkoutDueAt: 1, checkoutReminderAt: 1, createdAt: -1 });
+guestSchema.index({ status: 1, debtAmount: 1, createdAt: -1 });
+guestSchema.index({ room: 1, status: 1, createdAt: -1 });
+guestSchema.index({ guestType: 1, vip: 1, status: 1, createdAt: -1 });
+guestSchema.index({ checkInAt: -1 });
 
 module.exports = mongoose.model("Guest", guestSchema);

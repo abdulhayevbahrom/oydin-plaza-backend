@@ -13,6 +13,8 @@ const createGuestSchema = {
     guestType: { type: "string", enum: ["uzb", "chetellik"], default: "uzb" },
     isBlacklisted: { type: "boolean", default: false },
     vip: { type: "boolean", default: false },
+    isBooking: { type: "boolean", default: false },
+    bookedForDate: { type: "string", minLength: 1 },
     room: { type: "string", pattern: "^[0-9a-fA-F]{24}$" },
     dailyRate: { type: "number", minimum: 0 },
     stayDays: { type: "number", minimum: 1 },
@@ -36,6 +38,7 @@ const updateGuestSchema = {
     dailyRate: { type: "number", minimum: 0 },
     stayDays: { type: "number", minimum: 1 },
     totalAmount: { type: "number", minimum: 0 },
+    bookedForAt: { type: "string", minLength: 1 },
     note: { type: "string" },
   },
 };
@@ -69,6 +72,20 @@ const addPaymentSchema = {
   },
 };
 
+const addGuestServiceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "price", "quantity"],
+  properties: {
+    serviceId: { type: "string", pattern: "^[0-9a-fA-F]{24}$" },
+    name: { type: "string", minLength: 1 },
+    price: { type: "number", minimum: 0 },
+    quantity: { type: "number", minimum: 1, multipleOf: 1 },
+    usedAt: { type: "string" },
+    note: { type: "string" },
+  },
+};
+
 const vipRequestIdParamsSchema = {
   type: "object",
   additionalProperties: false,
@@ -94,6 +111,7 @@ module.exports = {
   guestIdParamsSchema,
   guestPassportParamsSchema,
   addPaymentSchema,
+  addGuestServiceSchema,
   vipRequestIdParamsSchema,
   decideVipRequestSchema,
 };

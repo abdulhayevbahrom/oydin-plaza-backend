@@ -3,6 +3,8 @@ const Guest = require("../model/Guest");
 const response = require("../utils/response");
 
 const normalizeRoomNumber = (value) => String(value || "").trim().toUpperCase();
+const getOccupancyStatus = (activeCount, capacity) =>
+  activeCount >= capacity ? "band" : "bosh";
 
 const createRoom = async (req, res) => {
   try {
@@ -62,13 +64,18 @@ const updateRoom = async (req, res) => {
       runValidators: true,
     });
 
-    if (Object.prototype.hasOwnProperty.call(updates, "capacity")) {
+    if (
+      Object.prototype.hasOwnProperty.call(updates, "capacity") ||
+      Object.prototype.hasOwnProperty.call(updates, "status")
+    ) {
       const activeCount = await Guest.countDocuments({
         room: room._id,
         status: "active",
       });
       room.activeGuestsCount = activeCount;
-      room.status = activeCount >= room.capacity ? "band" : "bosh";
+      if (room.status !== "remont") {
+        room.status = getOccupancyStatus(activeCount, room.capacity);
+      }
       await room.save();
     }
 

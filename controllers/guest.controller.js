@@ -2,6 +2,7 @@ const Guest = require("../model/Guest");
 const Room = require("../model/Room");
 const VipRequest = require("../model/VipRequest");
 const Employee = require("../model/Employee");
+const Service = require("../model/Service");
 const response = require("../utils/response");
 const {
   getHotelSettings,
@@ -133,6 +134,51 @@ const syncAllActiveGuestsBilling = async () => {
   }
 };
 
+const activateDueBookings = async () => {
+  const now = new Date();
+  const dueBookings = await Guest.find({
+    status: "booked",
+    bookedForAt: { $lte: now },
+  });
+  if (!dueBookings.length) return;
+
+  const hotelSettings = await getHotelSettings();
+  for (const guest of dueBookings) {
+    // eslint-disable-next-line no-await-in-loop
+    const room = await Room.findById(guest.room).select("status capacity");
+    if (!room || room.status === "remont") continue;
+
+    // eslint-disable-next-line no-await-in-loop
+    const activeCount = await Guest.countDocuments({
+      room: room._id,
+      status: "active",
+    });
+    if (activeCount >= Number(room.capacity || 0)) continue;
+
+    const baseCheckInAt = guest.bookedForAt || now;
+    const billing = buildBillingState(
+      baseCheckInAt,
+      guest.stayDays,
+      now,
+      hotelSettings,
+    );
+
+    guest.status = "active";
+    guest.checkInAt = baseCheckInAt;
+    guest.billableDays = billing.billableDays;
+    guest.checkoutReminderAt = billing.checkoutReminderAt;
+    guest.checkoutDueAt = billing.checkoutDueAt;
+    guest.totalAmount =
+      Number(guest.dailyRate || 0) * Number(billing.billableDays || 1);
+    recalcAmounts(guest);
+
+    // eslint-disable-next-line no-await-in-loop
+    await guest.save();
+    // eslint-disable-next-line no-await-in-loop
+    await syncRoomOccupancy(room._id);
+  }
+};
+
 const syncRoomOccupancy = async (roomId) => {
   const room = await Room.findById(roomId);
   if (!room) return;
@@ -143,7 +189,9 @@ const syncRoomOccupancy = async (roomId) => {
   });
 
   room.activeGuestsCount = activeCount;
-  room.status = activeCount >= room.capacity ? "band" : "bosh";
+  if (room.status !== "remont") {
+    room.status = activeCount >= room.capacity ? "band" : "bosh";
+  }
   await room.save();
 };
 
@@ -157,6 +205,8 @@ const createGuest = async (req, res) => {
       phone,
       guestType = "uzb",
       vip = false,
+      isBooking = false,
+      bookedForDate,
       room,
       dailyRate,
       stayDays,
@@ -180,6 +230,12 @@ const createGuest = async (req, res) => {
 
     const roomDoc = await Room.findById(room);
     if (!roomDoc) return response.notFound(res, "Xona topilmadi");
+    if (roomDoc.status === "remont") {
+      return response.error(
+        res,
+        "Bu xona remont/yopiq holatda. Mehmonni joylab bo'lmaydi",
+      );
+    }
 
     const activeCount = await Guest.countDocuments({ room, status: "active" });
     if (activeCount >= roomDoc.capacity) {
@@ -189,14 +245,40 @@ const createGuest = async (req, res) => {
     const hotelSettings = await getHotelSettings();
     const normalizedDailyRate = Number(dailyRate || 0);
     const normalizedStayDays = Math.max(Number(stayDays || 1), 1);
+    const isReservation = Boolean(isBooking);
+    const bookedForAt =
+      isReservation && bookedForDate ? new Date(bookedForDate) : null;
+    if (isReservation) {
+      if (!bookedForAt || Number.isNaN(bookedForAt.getTime())) {
+        return response.error(res, "Bron sanasi noto'g'ri");
+      }
+
+      const start = new Date(bookedForAt);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(bookedForAt);
+      end.setHours(23, 59, 59, 999);
+      const hasBooking = await Guest.exists({
+        room,
+        status: "booked",
+        bookedForAt: { $gte: start, $lte: end },
+      });
+      if (hasBooking) {
+        return response.error(
+          res,
+          "Bu xona shu kunga allaqachon bron qilingan",
+        );
+      }
+    }
+
+    const baseCheckInAt = isReservation ? bookedForAt : new Date();
     const billing = buildBillingState(
-      new Date(),
+      baseCheckInAt,
       normalizedStayDays,
       new Date(),
       hotelSettings,
     );
 
-    const isVipRequested = Boolean(vip);
+    const isVipRequested = !isReservation && Boolean(vip);
     const acceptedBy = await buildActionBy(req.admin);
 
     const guest = await Guest.create({
@@ -214,12 +296,15 @@ const createGuest = async (req, res) => {
       billableDays: billing.billableDays,
       checkoutReminderAt: billing.checkoutReminderAt,
       checkoutDueAt: billing.checkoutDueAt,
+      bookedForAt,
       dailyRate: normalizedDailyRate,
       totalAmount: normalizedDailyRate * billing.billableDays,
       paidAmount: 0,
-      debtAmount: normalizedDailyRate * billing.billableDays,
+      debtAmount: isReservation ? 0 : normalizedDailyRate * billing.billableDays,
       payments: [],
+      status: isReservation ? "booked" : "active",
       acceptedBy,
+      checkInAt: baseCheckInAt,
       note,
     });
 
@@ -244,7 +329,9 @@ const createGuest = async (req, res) => {
       }
     }
 
-    await syncRoomOccupancy(roomDoc._id);
+    if (!isReservation) {
+      await syncRoomOccupancy(roomDoc._id);
+    }
 
     const populated = await Guest.findById(guest._id).populate("room");
     if (vipRequest) {
@@ -257,7 +344,9 @@ const createGuest = async (req, res) => {
 
     return response.created(
       res,
-      "Mehmon muvaffaqiyatli qabul qilindi",
+      isReservation
+        ? "Mehmon muvaffaqiyatli bron qilindi"
+        : "Mehmon muvaffaqiyatli qabul qilindi",
       populated,
     );
   } catch (error) {
@@ -265,7 +354,7 @@ const createGuest = async (req, res) => {
   }
 };
 
-const buildGuestsPipeline = ({
+const buildGuestsFilter = async ({
   tab,
   query,
   guestType,
@@ -275,129 +364,70 @@ const buildGuestsPipeline = ({
   category,
   startDate,
   endDate,
-  page,
-  limit,
 }) => {
-  const guestMatch = {};
+  const filter = {};
 
-  if (tab === "active") guestMatch.status = "active";
-  if (tab === "history") guestMatch.status = "checked_out";
-  if (tab === "debtors") guestMatch.debtAmount = { $gt: 0 };
+  if (tab === "active") filter.status = { $in: ["active", "booked"] };
+  if (tab === "history") filter.status = "checked_out";
+  if (tab === "booked") filter.status = "booked";
+  if (tab === "debtors") filter.debtAmount = { $gt: 0 };
 
   if (guestType && ["uzb", "chetellik"].includes(guestType)) {
-    guestMatch.guestType = guestType;
+    filter.guestType = guestType;
   }
 
-  if (vip === "true") guestMatch.vip = true;
-  if (vip === "false") guestMatch.vip = false;
+  if (vip === "true") filter.vip = true;
+  if (vip === "false") filter.vip = false;
 
   if (startDate || endDate) {
-    guestMatch.checkInAt = {};
+    filter.checkInAt = {};
     if (startDate) {
       const from = new Date(startDate);
-      if (!Number.isNaN(from.getTime())) guestMatch.checkInAt.$gte = from;
+      if (!Number.isNaN(from.getTime())) filter.checkInAt.$gte = from;
     }
     if (endDate) {
       const to = new Date(endDate);
       if (!Number.isNaN(to.getTime())) {
         to.setHours(23, 59, 59, 999);
-        guestMatch.checkInAt.$lte = to;
+        filter.checkInAt.$lte = to;
       }
     }
-    if (Object.keys(guestMatch.checkInAt).length === 0)
-      delete guestMatch.checkInAt;
+    if (Object.keys(filter.checkInAt).length === 0) delete filter.checkInAt;
   }
 
-  const roomMatch = {};
-  if (roomNumber)
-    roomMatch["room.roomNumber"] = {
-      $regex: escapeRegex(roomNumber),
-      $options: "i",
-    };
-  if (floor !== undefined && floor !== "")
-    roomMatch["room.floor"] = Number(floor);
-  if (category) roomMatch["room.category"] = category;
+  const roomFilter = {};
+  if (roomNumber) {
+    roomFilter.roomNumber = { $regex: escapeRegex(roomNumber), $options: "i" };
+  }
+  if (floor !== undefined && floor !== "") roomFilter.floor = Number(floor);
+  if (category) roomFilter.category = category;
+
+  let roomIdsByFilter = null;
+  if (Object.keys(roomFilter).length > 0) {
+    const roomDocs = await Room.find(roomFilter).select("_id").lean();
+    roomIdsByFilter = roomDocs.map((room) => room._id);
+    if (!roomIdsByFilter.length) return { filter: { _id: null } };
+    filter.room = { $in: roomIdsByFilter };
+  }
 
   const search = String(query || "").trim();
-  const searchMatch = search
-    ? {
-        $or: [
-          { firstname: { $regex: escapeRegex(search), $options: "i" } },
-          { lastname: { $regex: escapeRegex(search), $options: "i" } },
-          { passport: { $regex: escapeRegex(search), $options: "i" } },
-          { "room.roomNumber": { $regex: escapeRegex(search), $options: "i" } },
-        ],
-      }
-    : null;
+  if (search) {
+    const searchRegex = { $regex: escapeRegex(search), $options: "i" };
+    const roomSearchIds = await Room.find({ roomNumber: searchRegex })
+      .select("_id")
+      .lean();
 
-  const pipeline = [
-    { $match: guestMatch },
-    {
-      $lookup: {
-        from: "rooms",
-        localField: "room",
-        foreignField: "_id",
-        as: "room",
-      },
-    },
-    { $unwind: "$room" },
-  ];
-
-  if (Object.keys(roomMatch).length > 0) pipeline.push({ $match: roomMatch });
-  if (searchMatch) pipeline.push({ $match: searchMatch });
-
-  // Active ro'yxatda ogohlantirish vaqtiga kirgan mijozlar tepada chiqadi
-  if (tab === "active") {
-    pipeline.push({
-      $addFields: {
-        isCheckoutReminderTimeAgg: {
-          $and: [
-            { $gte: ["$$NOW", "$checkoutReminderAt"] },
-            { $lt: ["$$NOW", "$checkoutDueAt"] },
-          ],
-        },
-        isCheckoutOverdueAgg: {
-          $gt: ["$$NOW", "$checkoutDueAt"],
-        },
-      },
-    });
+    const roomIds = roomSearchIds.map((room) => room._id);
+    const searchOr = [
+      { firstname: searchRegex },
+      { lastname: searchRegex },
+      { passport: searchRegex },
+    ];
+    if (roomIds.length) searchOr.push({ room: { $in: roomIds } });
+    filter.$or = searchOr;
   }
 
-  const sortStage =
-    tab === "active"
-      ? {
-          isCheckoutReminderTimeAgg: -1,
-          isCheckoutOverdueAgg: -1,
-          createdAt: -1,
-        }
-      : { createdAt: -1 };
-
-  pipeline.push(
-    { $sort: sortStage },
-    {
-      $facet: {
-        items: [{ $skip: (page - 1) * limit }, { $limit: limit }],
-        total: [{ $count: "count" }],
-        floorOptions: [
-          { $group: { _id: "$room.floor" } },
-          { $sort: { _id: 1 } },
-          { $project: { _id: 0, value: "$_id" } },
-        ],
-        roomNumberOptions: [
-          { $group: { _id: "$room.roomNumber" } },
-          { $sort: { _id: 1 } },
-          { $project: { _id: 0, value: "$_id" } },
-        ],
-        categoryOptions: [
-          { $group: { _id: "$room.category" } },
-          { $sort: { _id: 1 } },
-          { $project: { _id: 0, value: "$_id" } },
-        ],
-      },
-    },
-  );
-
-  return pipeline;
+  return { filter };
 };
 
 const attachGuestRuntimeFlags = (guest) => {
@@ -413,13 +443,12 @@ const attachGuestRuntimeFlags = (guest) => {
 
 const getGuests = async (req, res) => {
   try {
-    await syncAllActiveGuestsBilling();
+    await activateDueBookings();
 
     const tab = String(req.query.tab || "active").toLowerCase();
     const page = Math.max(Number(req.query.page || 1), 1);
     const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
-
-    const pipeline = buildGuestsPipeline({
+    const { filter } = await buildGuestsFilter({
       tab,
       query: req.query.query,
       guestType: req.query.guestType,
@@ -429,23 +458,71 @@ const getGuests = async (req, res) => {
       category: req.query.category,
       startDate: req.query.startDate,
       endDate: req.query.endDate,
-      page,
-      limit,
     });
+    const sort =
+      tab === "active"
+        ? { checkoutDueAt: 1, checkoutReminderAt: 1, createdAt: -1 }
+        : { createdAt: -1 };
 
-    const [result] = await Guest.aggregate(pipeline);
-    const total = Number(result?.total?.[0]?.count || 0);
+    const [itemsRaw, total] = await Promise.all([
+      Guest.find(filter)
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate("room", "roomNumber floor category")
+        .lean(),
+      Guest.countDocuments(filter),
+    ]);
+
     const totalPages = Math.max(Math.ceil(total / limit), 1);
-    const items = (result?.items || []).map(attachGuestRuntimeFlags);
+    const items = itemsRaw.map(attachGuestRuntimeFlags);
+    if (tab === "active") {
+      items.sort((a, b) => {
+        const aReminder = a.isCheckoutReminderTime ? 1 : 0;
+        const bReminder = b.isCheckoutReminderTime ? 1 : 0;
+        if (bReminder !== aReminder) return bReminder - aReminder;
+        const aOverdue = a.isCheckoutOverdue ? 1 : 0;
+        const bOverdue = b.isCheckoutOverdue ? 1 : 0;
+        if (bOverdue !== aOverdue) return bOverdue - aOverdue;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+    }
+    const floors = [];
+    const roomNumbers = [];
+    const categories = [];
+    const floorSet = new Set();
+    const roomSet = new Set();
+    const categorySet = new Set();
+
+    for (const guest of items) {
+      const floor = guest?.room?.floor;
+      const roomNumber = guest?.room?.roomNumber;
+      const category = guest?.room?.category;
+
+      if (floor !== undefined && floor !== null && !floorSet.has(floor)) {
+        floorSet.add(floor);
+        floors.push(floor);
+      }
+      if (roomNumber && !roomSet.has(roomNumber)) {
+        roomSet.add(roomNumber);
+        roomNumbers.push(roomNumber);
+      }
+      if (category && !categorySet.has(category)) {
+        categorySet.add(category);
+        categories.push(category);
+      }
+    }
+
+    floors.sort((a, b) => Number(a) - Number(b));
+    roomNumbers.sort();
+    categories.sort();
 
     return response.success(res, "Mehmonlar ro'yxati", {
       items,
       filterOptions: {
-        floors: (result?.floorOptions || []).map((item) => item.value),
-        roomNumbers: (result?.roomNumberOptions || []).map(
-          (item) => item.value,
-        ),
-        categories: (result?.categoryOptions || []).map((item) => item.value),
+        floors,
+        roomNumbers,
+        categories,
       },
       pagination: {
         page,
@@ -510,6 +587,77 @@ const updateGuest = async (req, res) => {
     }
 
     const updates = { ...req.body };
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    let nextBookedForAt = guest.bookedForAt;
+
+    if (Object.prototype.hasOwnProperty.call(updates, "bookedForAt")) {
+      if (guest.status !== "booked") {
+        return response.error(
+          res,
+          "Bron sanani faqat bron qilingan mijozda o'zgartirish mumkin",
+        );
+      }
+      const parsedBookedDate = new Date(updates.bookedForAt);
+      if (Number.isNaN(parsedBookedDate.getTime())) {
+        return response.error(res, "Bron sanasi noto'g'ri");
+      }
+      if (parsedBookedDate < todayStart) {
+        return response.error(
+          res,
+          "Bron sanasi bugundan oldin bo'lishi mumkin emas",
+        );
+      }
+      updates.bookedForAt = parsedBookedDate;
+      nextBookedForAt = parsedBookedDate;
+    }
+
+    if (updates.room && String(updates.room) !== String(guest.room)) {
+      const targetRoom = await Room.findById(updates.room).lean();
+      if (!targetRoom) return response.notFound(res, "Xona topilmadi");
+      if (targetRoom.status === "remont") {
+        return response.error(
+          res,
+          "Bu xona remont/yopiq holatda. Mehmonni joylab bo'lmaydi",
+        );
+      }
+
+      if (guest.status !== "booked") {
+        const targetActiveCount = await Guest.countDocuments({
+          room: targetRoom._id,
+          status: "active",
+          _id: { $ne: guest._id },
+        });
+        if (targetActiveCount >= Number(targetRoom.capacity || 0)) {
+          return response.error(res, "Xonada bo'sh joy yo'q");
+        }
+      }
+    }
+
+    if (guest.status === "booked") {
+      const nextRoomId = updates.room ? String(updates.room) : String(guest.room);
+      if (!nextBookedForAt) {
+        return response.error(res, "Bron sanasi topilmadi");
+      }
+      const dayStart = new Date(nextBookedForAt);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(nextBookedForAt);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const hasBookingConflict = await Guest.exists({
+        _id: { $ne: guest._id },
+        room: nextRoomId,
+        status: "booked",
+        bookedForAt: { $gte: dayStart, $lte: dayEnd },
+      });
+      if (hasBookingConflict) {
+        return response.error(
+          res,
+          "Bu xona shu kunga allaqachon bron qilingan",
+        );
+      }
+    }
+
     const wantsVipRequest = Object.prototype.hasOwnProperty.call(updates, "vip")
       ? Boolean(updates.vip)
       : false;
@@ -719,6 +867,55 @@ const addGuestPayment = async (req, res) => {
   }
 };
 
+const addGuestService = async (req, res) => {
+  try {
+    const guest = await Guest.findById(req.params.id);
+    if (!guest) return response.notFound(res, "Mehmon topilmadi");
+
+    await syncGuestBilling(guest);
+
+    let serviceDoc = null;
+    if (req.body.serviceId) {
+      serviceDoc = await Service.findById(req.body.serviceId).lean();
+    }
+
+    const name = String(req.body.name || serviceDoc?.name || "").trim();
+    const price = Number(
+      Object.prototype.hasOwnProperty.call(req.body, "price")
+        ? req.body.price
+        : serviceDoc?.defaultPrice || 0,
+    );
+    const quantity = Math.max(Number(req.body.quantity || 1), 1);
+    const totalAmount = price * quantity;
+
+    if (!name) return response.error(res, "Xizmat nomi majburiy");
+
+    guest.services.push({
+      serviceId: serviceDoc?._id,
+      name,
+      price,
+      quantity,
+      totalAmount,
+      usedAt: req.body.usedAt ? new Date(req.body.usedAt) : new Date(),
+      note: String(req.body.note || "").trim(),
+      createdBy: await buildActionBy(req.admin),
+    });
+
+    guest.totalAmount = Number(guest.totalAmount || 0) + totalAmount;
+    recalcAmounts(guest);
+    await guest.save();
+
+    const populated = await Guest.findById(guest._id).populate("room").lean();
+    return response.success(
+      res,
+      "Mehmon xizmati qo'shildi",
+      attachGuestRuntimeFlags(populated),
+    );
+  } catch (error) {
+    return response.serverError(res, error.message);
+  }
+};
+
 const checkoutGuest = async (req, res) => {
   try {
     const guest = await Guest.findById(req.params.id);
@@ -777,6 +974,7 @@ module.exports = {
   decideVipRequest,
   updateGuest,
   addGuestPayment,
+  addGuestService,
   checkoutGuest,
   deleteGuest,
 };

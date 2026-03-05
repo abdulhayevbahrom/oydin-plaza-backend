@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const settingSchema = new mongoose.Schema(
   {
+    hotelName: {
+      type: String,
+      default: "Mehmonxona nomi",
+      trim: true,
+    },
     checkoutTime: {
       type: String,
       default: "15:00",

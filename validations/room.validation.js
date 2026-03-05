@@ -1,5 +1,5 @@
 const categories = ["standart", "polulyuks", "lyuks", "apartament", "bir_kishilik"];
-const statuses = ["bosh", "band"];
+const statuses = ["bosh", "band", "remont"];
 
 const createRoomSchema = {
   type: "object",
@@ -20,6 +20,7 @@ const createRoomSchema = {
       },
     },
     description: { type: "string" },
+    status: { type: "string", enum: statuses },
   },
 };
 
@@ -41,6 +42,7 @@ const updateRoomSchema = {
       },
     },
     description: { type: "string" },
+    status: { type: "string", enum: statuses },
   },
 };
 
