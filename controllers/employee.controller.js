@@ -7,6 +7,8 @@ const ACCESS_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "12h";
 const REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
 const REFRESH_SECRET =
   process.env.JWT_REFRESH_SECRET_KEY || process.env.JWT_SECRET_KEY;
+const EMPLOYEE_LIST_FIELDS =
+  "firstname lastname position salary canLogin login sections isActive createdAt";
 
 const buildTokenPayload = (employee) => ({
   id: employee._id,
@@ -72,7 +74,10 @@ const createEmployee = async (req, res) => {
 
 const getEmployees = async (_, res) => {
   try {
-    const employees = await Employee.find().sort({ createdAt: -1 });
+    const employees = await Employee.find()
+      .select(EMPLOYEE_LIST_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
     return response.success(res, "Hodimlar ro'yxati", employees);
   } catch (error) {
     return response.serverError(res, error.message);

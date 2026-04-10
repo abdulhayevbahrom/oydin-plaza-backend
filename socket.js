@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const VipRequest = require("./model/VipRequest");
 
 const canManageVip = (payload) => {
   if (!payload) return false;
@@ -14,6 +15,11 @@ const resolveToken = (socket) => {
   return String(headerToken).replace(/^Bearer\s+/i, "");
 };
 
+const emitPendingVipCountToSocket = async (socket) => {
+  const count = await VipRequest.countDocuments({ status: "pending" });
+  socket.emit("vip_pending_count", { count });
+};
+
 class SocketService {
   async connect(io) {
     io.on("connection", async (socket) => {
@@ -26,6 +32,11 @@ class SocketService {
 
           if (canManageVip(payload)) {
             socket.join("vip-admins");
+            try {
+              await emitPendingVipCountToSocket(socket);
+            } catch (_) {
+              // count yuborishda xatolik bo'lsa socket ishlashda davom etadi
+            }
           }
         } catch (_) {
           // token noto'g'ri bo'lsa oddiy ulanish sifatida qoladi
@@ -36,6 +47,7 @@ class SocketService {
         const role = String(data.role || "").toLowerCase();
         if (role === "admin") {
           socket.join("vip-admins");
+          emitPendingVipCountToSocket(socket).catch(() => {});
         }
       });
 

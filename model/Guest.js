@@ -111,5 +111,7 @@ guestSchema.index({ status: 1, debtAmount: 1, createdAt: -1 });
 guestSchema.index({ room: 1, status: 1, createdAt: -1 });
 guestSchema.index({ guestType: 1, vip: 1, status: 1, createdAt: -1 });
 guestSchema.index({ checkInAt: -1 });
+guestSchema.index({ "payments.createdAt": -1 });
+guestSchema.index({ checkOutAt: -1, status: 1 });
 
 module.exports = mongoose.model("Guest", guestSchema);

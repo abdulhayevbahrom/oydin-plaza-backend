@@ -40,10 +40,12 @@ const {
   updateExpense,
   deleteExpense,
 } = require("../controllers/expense.controller");
+const { getDashboardSummary } = require("../controllers/dashboard.controller");
 const {
   getSettings,
   updateSettings,
 } = require("../controllers/setting.controller");
+const { sendSupportMessage } = require("../controllers/support.controller");
 const {
   createGuestSchema,
   updateGuestSchema,
@@ -66,11 +68,15 @@ const {
   addHallBookingPaymentSchema,
 } = require("../validations/hallBooking.validation");
 const {
+  sendSupportMessageSchema,
+} = require("../validations/support.validation");
+const {
   createGuest,
   getGuests,
   getGuestById,
   getGuestByPassport,
   getVipRequests,
+  getVipRequestsCount,
   decideVipRequest,
   updateGuest,
   addGuestPayment,
@@ -128,6 +134,7 @@ router.put(
 );
 router.delete("/room/:id", validate(roomIdParamsSchema, "params"), deleteRoom);
 router.post("/expense", validate(createExpenseSchema), createExpense);
+router.get("/dashboard", getDashboardSummary);
 router.get("/expenses", getExpenses);
 router.put(
   "/expense/:id",
@@ -185,6 +192,7 @@ router.delete(
 );
 router.post("/guest", validate(createGuestSchema), createGuest);
 router.get("/guests", getGuests);
+router.get("/vip-requests/count", getVipRequestsCount);
 router.get("/vip-requests", getVipRequests);
 router.post(
   "/vip-request/:id/decision",
@@ -222,5 +230,10 @@ router.post(
   checkoutGuest,
 );
 router.delete("/guest/:id", validate(guestIdParamsSchema, "params"), deleteGuest);
+router.post(
+  "/support/message",
+  validate(sendSupportMessageSchema),
+  sendSupportMessage,
+);
 
 module.exports = router;

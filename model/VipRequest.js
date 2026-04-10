@@ -44,5 +44,7 @@ const vipRequestSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-module.exports = mongoose.model("VipRequest", vipRequestSchema);
+// VIP list endpoint (status + createdAt sort) uchun tezkor index.
+vipRequestSchema.index({ status: 1, createdAt: -1 });
 
+module.exports = mongoose.model("VipRequest", vipRequestSchema);

@@ -10,6 +10,14 @@ const {
 } = require("../utils/hotelSettings");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const VIP_REQUEST_FIELDS = "status guest requestedBy decidedBy decidedAt note createdAt";
+const VIP_GUEST_FIELDS = "firstname lastname passport room vip vipRequestStatus";
+
+const emitPendingVipCount = async (io) => {
+  if (!io) return;
+  const count = await VipRequest.countDocuments({ status: "pending" });
+  io.to("vip-admins").emit("vip_pending_count", { count });
+};
 
 const buildActionBy = async (user) => {
   if (!user) return null;
@@ -326,6 +334,7 @@ const createGuest = async (req, res) => {
           requestedBy: acceptedBy,
           createdAt: vipRequest.createdAt,
         });
+        await emitPendingVipCount(io);
       }
     }
 
@@ -690,6 +699,7 @@ const updateGuest = async (req, res) => {
           requestedBy,
           createdAt: vipRequest.createdAt,
         });
+        await emitPendingVipCount(io);
       }
     }
 
@@ -748,13 +758,40 @@ const getVipRequests = async (req, res) => {
     }
 
     const requests = await VipRequest.find(filter)
+      .select(VIP_REQUEST_FIELDS)
       .populate({
         path: "guest",
-        populate: { path: "room", select: "roomNumber" },
+        select: VIP_GUEST_FIELDS,
+        options: { lean: true },
+        populate: {
+          path: "room",
+          select: "roomNumber",
+          options: { lean: true },
+        },
       })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
 
     return response.success(res, "VIP so'rovlar ro'yxati", requests);
+  } catch (error) {
+    return response.serverError(res, error.message);
+  }
+};
+
+const getVipRequestsCount = async (req, res) => {
+  try {
+    if (!canManageVip(req.admin)) {
+      return response.forbidden(res, "VIP so'rovlarni ko'rishga ruxsat yo'q");
+    }
+
+    const status = String(req.query.status || "pending").toLowerCase();
+    const filter = {};
+    if (["pending", "approved", "rejected"].includes(status)) {
+      filter.status = status;
+    }
+
+    const count = await VipRequest.countDocuments(filter);
+    return response.success(res, "VIP so'rovlar soni", { count });
   } catch (error) {
     return response.serverError(res, error.message);
   }
@@ -824,6 +861,8 @@ const decideVipRequest = async (req, res) => {
         vipRequestStatus: guest.vipRequestStatus,
         debtAmount: guest.debtAmount,
       });
+
+      await emitPendingVipCount(io);
     }
 
     const populatedGuest = await Guest.findById(guest._id).populate("room");
@@ -953,7 +992,13 @@ const deleteGuest = async (req, res) => {
     const guest = await Guest.findByIdAndDelete(req.params.id);
     if (!guest) return response.notFound(res, "Mehmon topilmadi");
 
-    await VipRequest.deleteMany({ guest: guest._id });
+    const deleteResult = await VipRequest.deleteMany({ guest: guest._id });
+    if (deleteResult?.deletedCount > 0) {
+      const io = req.app.get("socket");
+      if (io) {
+        await emitPendingVipCount(io);
+      }
+    }
 
     if (guest.status === "active") {
       await syncRoomOccupancy(guest.room);
@@ -971,6 +1016,7 @@ module.exports = {
   getGuestById,
   getGuestByPassport,
   getVipRequests,
+  getVipRequestsCount,
   decideVipRequest,
   updateGuest,
   addGuestPayment,

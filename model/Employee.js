@@ -59,4 +59,7 @@ const employeeSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Hodimlar listida createdAt bo'yicha sort ishlatilgani uchun.
+employeeSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model("Employee", employeeSchema);
