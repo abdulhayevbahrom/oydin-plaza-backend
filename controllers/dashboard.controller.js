@@ -35,23 +35,56 @@ const getMonthBase = (monthQuery) => {
   return moment.tz(TIMEZONE).startOf("month");
 };
 
-const getPaymentTotal = async (startDate, endDate) => {
+const getHistoricalRevenue = async (
+  previousMonthStart,
+  monthStart,
+  previousDayStart,
+  anchorDayStart,
+) => {
   const [result] = await Guest.aggregate([
     { $unwind: "$payments" },
     {
       $match: {
-        "payments.createdAt": { $gte: startDate, $lt: endDate },
+        "payments.createdAt": {
+          $gte: previousMonthStart,
+          $lt: monthStart,
+        },
       },
     },
     {
-      $group: {
-        _id: null,
-        total: { $sum: { $ifNull: ["$payments.amount", 0] } },
+      $facet: {
+        previousMonthTotal: [
+          {
+            $group: {
+              _id: null,
+              total: { $sum: { $ifNull: ["$payments.amount", 0] } },
+            },
+          },
+        ],
+        previousDayTotal: [
+          {
+            $match: {
+              "payments.createdAt": {
+                $gte: previousDayStart,
+                $lt: anchorDayStart,
+              },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: { $ifNull: ["$payments.amount", 0] } },
+            },
+          },
+        ],
       },
     },
   ]);
 
-  return Number(result?.total || 0);
+  return {
+    previousMonthRevenue: Number(result?.previousMonthTotal?.[0]?.total || 0),
+    previousDayRevenue: Number(result?.previousDayTotal?.[0]?.total || 0),
+  };
 };
 
 const getDashboardSummary = async (req, res) => {
@@ -173,9 +206,11 @@ const getDashboardSummary = async (req, res) => {
     }));
 
     const monthRevenue = Number(paymentsFacetResult?.monthlyTotal?.[0]?.total || 0);
-    const previousMonthRevenue = await getPaymentTotal(
+    const { previousMonthRevenue, previousDayRevenue } = await getHistoricalRevenue(
       previousMonthStart.toDate(),
       monthStart.toDate(),
+      previousDayStart.toDate(),
+      anchorDayStart.toDate(),
     );
 
     const todayRevenue =
@@ -184,7 +219,7 @@ const getDashboardSummary = async (req, res) => {
     const yesterdayRevenue =
       previousDayStart.isSame(monthStart, "month")
         ? Number(dailyMap.get(previousDayStart.date()) || 0)
-        : await getPaymentTotal(previousDayStart.toDate(), anchorDayStart.toDate());
+        : previousDayRevenue;
 
     const paymentTypeMap = {};
     for (const item of paymentsFacetResult?.paymentTypes || []) {
@@ -402,8 +437,6 @@ const getDashboardSummary = async (req, res) => {
       weeklyRevenue: weeklyRevenueReady,
       paymentShare,
       recentPayments,
-      monthlySeries,
-      monthlyExpenseSeries,
       monthlyChart,
       roomOverview,
       expensesTotal,

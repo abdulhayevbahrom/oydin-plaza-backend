@@ -1,5 +1,7 @@
 const moment = require("moment-timezone");
+const mongoose = require("mongoose");
 const Guest = require("../model/Guest");
+const Room = require("../model/Room");
 const {
   applyTimeToDate,
   getHotelSettings,
@@ -8,6 +10,14 @@ const {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Tashkent";
+
+const emitGuestChanged = (io, payload = {}) => {
+  if (!io) return;
+  io.emit("guest_updated", {
+    ...payload,
+    emittedAt: new Date(),
+  });
+};
 
 // Mijozning billing holatini joriy vaqtga nisbatan hisoblaydi
 const buildBillingState = (
@@ -41,23 +51,203 @@ const buildBillingState = (
   };
 };
 
-// VIP bo'lmasa qarzni qayta hisoblaydi
-const recalcAmounts = (guest) => {
-  if (guest.vip) {
-    guest.debtAmount = 0;
-    return;
+const syncRoomsOccupancyByIds = async (roomIds = []) => {
+  const normalizedRoomIds = [
+    ...new Set(
+      roomIds
+        .map((id) => String(id || "").trim())
+        .filter((id) => mongoose.Types.ObjectId.isValid(id)),
+    ),
+  ];
+  if (!normalizedRoomIds.length) return;
+  const objectRoomIds = normalizedRoomIds.map((id) => new mongoose.Types.ObjectId(id));
+
+  const [rooms, activeCounts] = await Promise.all([
+    Room.find({ _id: { $in: objectRoomIds } })
+      .select("_id capacity status activeGuestsCount")
+      .lean(),
+    Guest.aggregate([
+      {
+        $match: {
+          status: "active",
+          room: { $in: objectRoomIds },
+        },
+      },
+      {
+        $group: {
+          _id: "$room",
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const activeMap = new Map(
+    activeCounts.map((item) => [String(item?._id || ""), Number(item?.count || 0)]),
+  );
+  const ops = [];
+  for (const room of rooms) {
+    const roomId = String(room?._id || "");
+    const activeCount = Number(activeMap.get(roomId) || 0);
+    const nextStatus =
+      room.status === "remont"
+        ? "remont"
+        : activeCount >= Number(room.capacity || 0)
+          ? "band"
+          : "bosh";
+
+    if (
+      Number(room.activeGuestsCount || 0) === activeCount &&
+      String(room.status || "") === nextStatus
+    ) {
+      continue;
+    }
+
+    ops.push({
+      updateOne: {
+        filter: { _id: room._id },
+        update: {
+          $set: {
+            activeGuestsCount: activeCount,
+            status: nextStatus,
+          },
+        },
+      },
+    });
   }
-  const paid = Number(guest.paidAmount || 0);
-  const total = Number(guest.totalAmount || 0);
-  guest.debtAmount = Math.max(total - paid, 0);
+
+  if (ops.length) {
+    await Room.bulkWrite(ops, { ordered: false });
+  }
+};
+
+const runActivateDueBookingsJob = async (io) => {
+  const now = new Date();
+  const dueBookings = await Guest.find({
+    status: "booked",
+    bookedForAt: { $lte: now },
+  })
+    .select("_id room stayDays dailyRate paidAmount vip bookedForAt")
+    .sort({ bookedForAt: 1, createdAt: 1 })
+    .lean();
+
+  if (!dueBookings.length) return;
+
+  const roomIds = [
+    ...new Set(
+      dueBookings
+        .map((item) => String(item?.room || "").trim())
+        .filter((id) => mongoose.Types.ObjectId.isValid(id)),
+    ),
+  ];
+  if (!roomIds.length) return;
+  const objectRoomIds = roomIds.map((id) => new mongoose.Types.ObjectId(id));
+
+  const [hotelSettings, rooms, activeCounts] = await Promise.all([
+    getHotelSettings(),
+    Room.find({
+      _id: { $in: objectRoomIds },
+      status: { $ne: "remont" },
+    })
+      .select("_id capacity")
+      .lean(),
+    Guest.aggregate([
+      {
+        $match: {
+          status: "active",
+          room: { $in: objectRoomIds },
+        },
+      },
+      {
+        $group: {
+          _id: "$room",
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const roomCapacityMap = new Map(
+    rooms.map((room) => [String(room?._id || ""), Number(room?.capacity || 0)]),
+  );
+  const roomActiveMap = new Map(
+    activeCounts.map((item) => [String(item?._id || ""), Number(item?.count || 0)]),
+  );
+
+  const ops = [];
+  const affectedRoomIds = new Set();
+  for (const guest of dueBookings) {
+    const roomId = String(guest?.room || "");
+    if (!roomCapacityMap.has(roomId)) continue;
+
+    const capacity = Number(roomCapacityMap.get(roomId) || 0);
+    const currentActive = Number(roomActiveMap.get(roomId) || 0);
+    if (currentActive >= capacity) continue;
+
+    const baseCheckInAt = guest.bookedForAt ? new Date(guest.bookedForAt) : now;
+    const billing = buildBillingState(
+      baseCheckInAt,
+      guest.stayDays,
+      now,
+      hotelSettings,
+    );
+    const nextTotalAmount =
+      Number(guest.dailyRate || 0) * Number(billing.billableDays || 1);
+    const nextDebtAmount = guest.vip
+      ? 0
+      : Math.max(nextTotalAmount - Number(guest.paidAmount || 0), 0);
+
+    ops.push({
+      updateOne: {
+        filter: { _id: guest._id, status: "booked" },
+        update: {
+          $set: {
+            status: "active",
+            checkInAt: baseCheckInAt,
+            stayDays: billing.stayDays,
+            billableDays: billing.billableDays,
+            checkoutDueAt: billing.checkoutDueAt,
+            checkoutReminderAt: billing.checkoutReminderAt,
+            totalAmount: nextTotalAmount,
+            debtAmount: nextDebtAmount,
+          },
+        },
+      },
+    });
+    roomActiveMap.set(roomId, currentActive + 1);
+    affectedRoomIds.add(roomId);
+  }
+
+  if (!ops.length) return;
+  await Guest.bulkWrite(ops, { ordered: false });
+  await syncRoomsOccupancyByIds([...affectedRoomIds]);
+  emitGuestChanged(io, {
+    reason: "guest_bookings_activated",
+    count: ops.length,
+    roomIds: [...affectedRoomIds],
+  });
 };
 
 // Sozlamadagi checkout vaqtida active mijozlarning o'tib ketgan kunlarini avtomatik oshiradi
-const runOverdueBillingJob = async () => {
+const runOverdueBillingJob = async (io) => {
   const now = new Date();
   const hotelSettings = await getHotelSettings();
-  const guests = await Guest.find({ status: "active" });
+  const guests = await Guest.find({
+    status: "active",
+    $or: [
+      { checkoutDueAt: { $lte: now } },
+      { checkoutDueAt: null },
+      { checkoutReminderAt: null },
+    ],
+  })
+    .select(
+      "_id checkInAt stayDays billableDays dailyRate totalAmount paidAmount debtAmount vip checkoutDueAt checkoutReminderAt",
+    )
+    .lean();
 
+  if (!guests.length) return;
+
+  const ops = [];
   for (const guest of guests) {
     const billing = buildBillingState(
       guest.checkInAt,
@@ -78,13 +268,31 @@ const runOverdueBillingJob = async () => {
 
     if (!changed) continue;
 
-    guest.billableDays = billing.billableDays;
-    guest.checkoutDueAt = billing.checkoutDueAt;
-    guest.checkoutReminderAt = billing.checkoutReminderAt;
-    guest.totalAmount = nextTotalAmount;
-    recalcAmounts(guest);
-    // eslint-disable-next-line no-await-in-loop
-    await guest.save();
+    const nextDebtAmount = guest.vip
+      ? 0
+      : Math.max(nextTotalAmount - Number(guest.paidAmount || 0), 0);
+    ops.push({
+      updateOne: {
+        filter: { _id: guest._id },
+        update: {
+          $set: {
+            billableDays: billing.billableDays,
+            checkoutDueAt: billing.checkoutDueAt,
+            checkoutReminderAt: billing.checkoutReminderAt,
+            totalAmount: nextTotalAmount,
+            debtAmount: nextDebtAmount,
+          },
+        },
+      },
+    });
+  }
+
+  if (ops.length) {
+    await Guest.bulkWrite(ops, { ordered: false });
+    emitGuestChanged(io, {
+      reason: "guest_billing_synced",
+      count: ops.length,
+    });
   }
 };
 
@@ -125,6 +333,8 @@ const startGuestBillingCron = (io) => {
   const state = {
     reminderKey: "",
     overdueKey: "",
+    activating: false,
+    overdueRunning: false,
   };
 
   const tick = async () => {
@@ -145,11 +355,25 @@ const startGuestBillingCron = (io) => {
         }
       }
 
+      if (!state.activating) {
+        state.activating = true;
+        try {
+          await runActivateDueBookingsJob(io);
+        } finally {
+          state.activating = false;
+        }
+      }
+
       if (hour === checkout.hour && minute === checkout.minute) {
         const overdueKey = `${dayKey}-${hotelSettings.checkoutTime}`;
-        if (state.overdueKey !== overdueKey) {
+        if (state.overdueKey !== overdueKey && !state.overdueRunning) {
+          state.overdueRunning = true;
           state.overdueKey = overdueKey;
-          await runOverdueBillingJob();
+          try {
+            await runOverdueBillingJob(io);
+          } finally {
+            state.overdueRunning = false;
+          }
         }
       }
     } catch (error) {
@@ -159,7 +383,8 @@ const startGuestBillingCron = (io) => {
   };
 
   // Server yoqilganda bir martalik tekshiruv
-  runOverdueBillingJob().catch(() => {});
+  runActivateDueBookingsJob(io).catch(() => {});
+  runOverdueBillingJob(io).catch(() => {});
   // Har 30 sekundda vaqt triggerini tekshiradi
   const interval = setInterval(tick, 30 * 1000);
   return interval;

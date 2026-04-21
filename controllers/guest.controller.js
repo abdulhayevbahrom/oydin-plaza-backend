@@ -3,6 +3,7 @@ const Room = require("../model/Room");
 const VipRequest = require("../model/VipRequest");
 const Employee = require("../model/Employee");
 const Service = require("../model/Service");
+const mongoose = require("mongoose");
 const response = require("../utils/response");
 const {
   getHotelSettings,
@@ -17,6 +18,14 @@ const emitPendingVipCount = async (io) => {
   if (!io) return;
   const count = await VipRequest.countDocuments({ status: "pending" });
   io.to("vip-admins").emit("vip_pending_count", { count });
+};
+
+const emitGuestChanged = (io, payload = {}) => {
+  if (!io) return;
+  io.emit("guest_updated", {
+    ...payload,
+    emittedAt: new Date(),
+  });
 };
 
 const buildActionBy = async (user) => {
@@ -142,65 +151,79 @@ const syncAllActiveGuestsBilling = async () => {
   }
 };
 
-const activateDueBookings = async () => {
-  const now = new Date();
-  const dueBookings = await Guest.find({
-    status: "booked",
-    bookedForAt: { $lte: now },
-  });
-  if (!dueBookings.length) return;
+const syncRoomsOccupancyBatch = async (roomIds = []) => {
+  const uniqueRoomIds = [
+    ...new Set(
+      roomIds
+        .map((id) => String(id || "").trim())
+        .filter((id) => mongoose.Types.ObjectId.isValid(id)),
+    ),
+  ];
+  if (!uniqueRoomIds.length) return;
+  const objectRoomIds = uniqueRoomIds.map((id) => new mongoose.Types.ObjectId(id));
 
-  const hotelSettings = await getHotelSettings();
-  for (const guest of dueBookings) {
-    // eslint-disable-next-line no-await-in-loop
-    const room = await Room.findById(guest.room).select("status capacity");
-    if (!room || room.status === "remont") continue;
+  const [rooms, activeCounts] = await Promise.all([
+    Room.find({ _id: { $in: objectRoomIds } })
+      .select("_id capacity status activeGuestsCount")
+      .lean(),
+    Guest.aggregate([
+      {
+        $match: {
+          status: "active",
+          room: { $in: objectRoomIds },
+        },
+      },
+      {
+        $group: {
+          _id: "$room",
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
 
-    // eslint-disable-next-line no-await-in-loop
-    const activeCount = await Guest.countDocuments({
-      room: room._id,
-      status: "active",
+  const activeMap = new Map(
+    activeCounts.map((item) => [String(item?._id || ""), Number(item?.count || 0)]),
+  );
+
+  const ops = [];
+  for (const room of rooms) {
+    const roomId = String(room?._id || "");
+    const activeCount = Number(activeMap.get(roomId) || 0);
+    const nextStatus =
+      room.status === "remont"
+        ? "remont"
+        : activeCount >= Number(room.capacity || 0)
+          ? "band"
+          : "bosh";
+
+    if (
+      Number(room.activeGuestsCount || 0) === activeCount &&
+      String(room.status || "") === nextStatus
+    ) {
+      continue;
+    }
+
+    ops.push({
+      updateOne: {
+        filter: { _id: room._id },
+        update: {
+          $set: {
+            activeGuestsCount: activeCount,
+            status: nextStatus,
+          },
+        },
+      },
     });
-    if (activeCount >= Number(room.capacity || 0)) continue;
+  }
 
-    const baseCheckInAt = guest.bookedForAt || now;
-    const billing = buildBillingState(
-      baseCheckInAt,
-      guest.stayDays,
-      now,
-      hotelSettings,
-    );
-
-    guest.status = "active";
-    guest.checkInAt = baseCheckInAt;
-    guest.billableDays = billing.billableDays;
-    guest.checkoutReminderAt = billing.checkoutReminderAt;
-    guest.checkoutDueAt = billing.checkoutDueAt;
-    guest.totalAmount =
-      Number(guest.dailyRate || 0) * Number(billing.billableDays || 1);
-    recalcAmounts(guest);
-
-    // eslint-disable-next-line no-await-in-loop
-    await guest.save();
-    // eslint-disable-next-line no-await-in-loop
-    await syncRoomOccupancy(room._id);
+  if (ops.length) {
+    await Room.bulkWrite(ops, { ordered: false });
   }
 };
 
 const syncRoomOccupancy = async (roomId) => {
-  const room = await Room.findById(roomId);
-  if (!room) return;
-
-  const activeCount = await Guest.countDocuments({
-    room: room._id,
-    status: "active",
-  });
-
-  room.activeGuestsCount = activeCount;
-  if (room.status !== "remont") {
-    room.status = activeCount >= room.capacity ? "band" : "bosh";
-  }
-  await room.save();
+  await syncRoomsOccupancyBatch([roomId]);
 };
 
 const createGuest = async (req, res) => {
@@ -342,6 +365,13 @@ const createGuest = async (req, res) => {
       await syncRoomOccupancy(roomDoc._id);
     }
 
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: String(guest.room || ""),
+      status: guest.status,
+      reason: isReservation ? "guest_booked" : "guest_created",
+    });
+
     const populated = await Guest.findById(guest._id).populate("room");
     if (vipRequest) {
       return response.created(
@@ -452,8 +482,6 @@ const attachGuestRuntimeFlags = (guest) => {
 
 const getGuests = async (req, res) => {
   try {
-    await activateDueBookings();
-
     const tab = String(req.query.tab || "active").toLowerCase();
     const page = Math.max(Number(req.query.page || 1), 1);
     const limit = Math.min(Math.max(Number(req.query.limit || 25), 1), 100);
@@ -730,9 +758,19 @@ const updateGuest = async (req, res) => {
 
     const nextRoomId = String(guest.room);
     if (previousRoomId !== nextRoomId) {
-      await syncRoomOccupancy(previousRoomId);
+      await syncRoomsOccupancyBatch([previousRoomId, nextRoomId]);
+    } else {
+      await syncRoomOccupancy(nextRoomId);
     }
-    await syncRoomOccupancy(nextRoomId);
+
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: nextRoomId,
+      previousRoomId,
+      status: guest.status,
+      debtAmount: Number(guest.debtAmount || 0),
+      reason: "guest_updated",
+    });
 
     const populated = await Guest.findById(guest._id).populate("room").lean();
     return response.success(
@@ -895,6 +933,15 @@ const addGuestPayment = async (req, res) => {
     recalcAmounts(guest);
     await guest.save();
 
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: String(guest.room || ""),
+      status: guest.status,
+      paidAmount: Number(guest.paidAmount || 0),
+      debtAmount: Number(guest.debtAmount || 0),
+      reason: "guest_payment_added",
+    });
+
     const populated = await Guest.findById(guest._id).populate("room").lean();
     return response.success(
       res,
@@ -944,6 +991,15 @@ const addGuestService = async (req, res) => {
     recalcAmounts(guest);
     await guest.save();
 
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: String(guest.room || ""),
+      status: guest.status,
+      totalAmount: Number(guest.totalAmount || 0),
+      debtAmount: Number(guest.debtAmount || 0),
+      reason: "guest_service_added",
+    });
+
     const populated = await Guest.findById(guest._id).populate("room").lean();
     return response.success(
       res,
@@ -971,6 +1027,14 @@ const checkoutGuest = async (req, res) => {
     await guest.save();
 
     await syncRoomOccupancy(guest.room);
+
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: String(guest.room || ""),
+      status: guest.status,
+      debtAmount: Number(guest.debtAmount || 0),
+      reason: "guest_checked_out",
+    });
 
     const populated = await Guest.findById(guest._id).populate("room").lean();
     return response.success(
@@ -1003,6 +1067,13 @@ const deleteGuest = async (req, res) => {
     if (guest.status === "active") {
       await syncRoomOccupancy(guest.room);
     }
+
+    emitGuestChanged(req.app.get("socket"), {
+      guestId: String(guest._id),
+      roomId: String(guest.room || ""),
+      status: guest.status,
+      reason: "guest_deleted",
+    });
 
     return response.success(res, "Mehmon o'chirildi");
   } catch (error) {
