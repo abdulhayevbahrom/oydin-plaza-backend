@@ -957,6 +957,12 @@ const addGuestService = async (req, res) => {
   try {
     const guest = await Guest.findById(req.params.id);
     if (!guest) return response.notFound(res, "Mehmon topilmadi");
+    if (guest.status === "checked_out") {
+      return response.error(
+        res,
+        "Checkout qilingan mijozga xizmat qo'shib bo'lmaydi",
+      );
+    }
 
     await syncGuestBilling(guest);
 

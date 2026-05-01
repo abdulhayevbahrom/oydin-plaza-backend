@@ -109,6 +109,9 @@ const createHallBooking = async (req, res) => {
     if (!validateDates(payload.startDate, payload.endDate)) {
       return response.error(res, "Sana oralig'i noto'g'ri");
     }
+    if (payload.paidAmount > payload.totalAmount) {
+      return response.error(res, "Boshlang'ich to'lov jami summadan oshmasin");
+    }
 
     if (await hasOverlap(payload)) {
       return response.error(
@@ -160,6 +163,12 @@ const updateHallBooking = async (req, res) => {
 
     if (!validateDates(payload.startDate, payload.endDate)) {
       return response.error(res, "Sana oralig'i noto'g'ri");
+    }
+    if (Number(current.paidAmount || 0) > payload.totalAmount) {
+      return response.error(
+        res,
+        "Jami summa mavjud to'lovdan kam bo'lishi mumkin emas",
+      );
     }
 
     if (await hasOverlap({ ...payload, excludeId: current._id })) {
