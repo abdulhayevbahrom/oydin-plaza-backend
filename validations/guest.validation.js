@@ -1,24 +1,57 @@
 const paymentTypes = ["naqd", "click", "bank", "karta"];
+const guestBaseProperties = {
+  firstname: { type: "string", minLength: 1 },
+  lastname: { type: "string", minLength: 1 },
+  passport: { type: "string" },
+  birthDate: { type: "string", minLength: 1 },
+  phone: { type: "string" },
+  guestType: { type: "string", enum: ["uzb", "chetellik"], default: "uzb" },
+  isBlacklisted: { type: "boolean", default: false },
+  vip: { type: "boolean", default: false },
+  isBooking: { type: "boolean", default: false },
+  bookedForDate: { type: "string", minLength: 1 },
+  room: { type: "string", pattern: "^[0-9a-fA-F]{24}$" },
+  dailyRate: { type: "number", minimum: 0 },
+  stayDays: { type: "number", minimum: 1 },
+  note: { type: "string" },
+};
 
 const createGuestSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["firstname", "lastname", "passport", "birthDate", "room", "dailyRate", "stayDays"],
+  required: ["firstname", "lastname", "birthDate", "room", "dailyRate", "stayDays"],
+  properties: guestBaseProperties,
+};
+
+const createGuestsBulkSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["room", "dailyRate", "stayDays", "guests"],
   properties: {
-    firstname: { type: "string", minLength: 1 },
-    lastname: { type: "string", minLength: 1 },
-    passport: { type: "string", minLength: 1 },
-    birthDate: { type: "string", minLength: 1 },
-    phone: { type: "string" },
-    guestType: { type: "string", enum: ["uzb", "chetellik"], default: "uzb" },
-    isBlacklisted: { type: "boolean", default: false },
-    vip: { type: "boolean", default: false },
-    isBooking: { type: "boolean", default: false },
-    bookedForDate: { type: "string", minLength: 1 },
     room: { type: "string", pattern: "^[0-9a-fA-F]{24}$" },
     dailyRate: { type: "number", minimum: 0 },
     stayDays: { type: "number", minimum: 1 },
-    note: { type: "string" },
+    guestType: { type: "string", enum: ["uzb", "chetellik"], default: "uzb" },
+    isBooking: { type: "boolean", default: false },
+    bookedForDate: { type: "string", minLength: 1 },
+    guests: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["firstname", "lastname", "birthDate"],
+        properties: {
+          firstname: { type: "string", minLength: 1 },
+          lastname: { type: "string", minLength: 1 },
+          passport: { type: "string" },
+          birthDate: { type: "string", minLength: 1 },
+          phone: { type: "string" },
+          note: { type: "string" },
+          vip: { type: "boolean", default: false },
+        },
+      },
+    },
   },
 };
 
@@ -29,7 +62,7 @@ const updateGuestSchema = {
   properties: {
     firstname: { type: "string", minLength: 1 },
     lastname: { type: "string", minLength: 1 },
-    passport: { type: "string", minLength: 1 },
+    passport: { type: "string" },
     birthDate: { type: "string", minLength: 1 },
     phone: { type: "string" },
     guestType: { type: "string", enum: ["uzb", "chetellik"] },
@@ -107,6 +140,7 @@ const decideVipRequestSchema = {
 
 module.exports = {
   createGuestSchema,
+  createGuestsBulkSchema,
   updateGuestSchema,
   guestIdParamsSchema,
   guestPassportParamsSchema,

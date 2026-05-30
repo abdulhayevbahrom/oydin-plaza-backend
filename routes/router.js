@@ -49,6 +49,7 @@ const {
 const { sendSupportMessage } = require("../controllers/support.controller");
 const {
   createGuestSchema,
+  createGuestsBulkSchema,
   updateGuestSchema,
   guestIdParamsSchema,
   guestPassportParamsSchema,
@@ -73,6 +74,7 @@ const {
 } = require("../validations/support.validation");
 const {
   createGuest,
+  createGuestsBulk,
   getGuests,
   getGuestById,
   getGuestByPassport,
@@ -193,6 +195,7 @@ router.delete(
   deleteHallBooking,
 );
 router.post("/guest", validate(createGuestSchema), createGuest);
+router.post("/guests/bulk", validate(createGuestsBulkSchema), createGuestsBulk);
 router.get("/guests", getGuests);
 router.get("/vip-requests/count", getVipRequestsCount);
 router.get("/vip-requests", getVipRequests);

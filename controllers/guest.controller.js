@@ -245,18 +245,20 @@ const createGuest = async (req, res) => {
     } = req.body;
 
     const normalizedPassport = String(passport || "").trim();
-    const blacklistedGuest = await Guest.findOne({
-      passport: {
-        $regex: `^${escapeRegex(normalizedPassport)}$`,
-        $options: "i",
-      },
-      isBlacklisted: true,
-    }).select("_id firstname lastname passport");
-    if (blacklistedGuest) {
-      return response.error(
-        res,
-        "Bu mijoz qora ro'yxatda. Mijozni qabul qilish mumkin emas",
-      );
+    if (normalizedPassport) {
+      const blacklistedGuest = await Guest.findOne({
+        passport: {
+          $regex: `^${escapeRegex(normalizedPassport)}$`,
+          $options: "i",
+        },
+        isBlacklisted: true,
+      }).select("_id firstname lastname passport");
+      if (blacklistedGuest) {
+        return response.error(
+          res,
+          "Bu mijoz qora ro'yxatda. Mijozni qabul qilish mumkin emas",
+        );
+      }
     }
 
     const roomDoc = await Room.findById(room);
@@ -387,6 +389,172 @@ const createGuest = async (req, res) => {
         ? "Mehmon muvaffaqiyatli bron qilindi"
         : "Mehmon muvaffaqiyatli qabul qilindi",
       populated,
+    );
+  } catch (error) {
+    return response.serverError(res, error.message);
+  }
+};
+
+const createGuestsBulk = async (req, res) => {
+  try {
+    const {
+      room,
+      dailyRate,
+      stayDays,
+      guestType = "uzb",
+      isBooking = false,
+      bookedForDate,
+      guests = [],
+    } = req.body;
+
+    if (!Array.isArray(guests) || guests.length < 1) {
+      return response.error(res, "Kamida 1 ta mijoz ma'lumoti yuborilishi kerak");
+    }
+
+    const roomDoc = await Room.findById(room);
+    if (!roomDoc) return response.notFound(res, "Xona topilmadi");
+    if (roomDoc.status === "remont") {
+      return response.error(
+        res,
+        "Bu xona remont/yopiq holatda. Mehmonni joylab bo'lmaydi",
+      );
+    }
+
+    const isReservation = Boolean(isBooking);
+    const normalizedDailyRate = Number(dailyRate || 0);
+    const normalizedStayDays = Math.max(Number(stayDays || 1), 1);
+    const bookedForAt =
+      isReservation && bookedForDate ? new Date(bookedForDate) : null;
+
+    if (isReservation) {
+      if (!bookedForAt || Number.isNaN(bookedForAt.getTime())) {
+        return response.error(res, "Bron sanasi noto'g'ri");
+      }
+      const start = new Date(bookedForAt);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(bookedForAt);
+      end.setHours(23, 59, 59, 999);
+      const hasBooking = await Guest.exists({
+        room,
+        status: "booked",
+        bookedForAt: { $gte: start, $lte: end },
+      });
+      if (hasBooking) {
+        return response.error(
+          res,
+          "Bu xona shu kunga allaqachon bron qilingan",
+        );
+      }
+    } else {
+      const activeCount = await Guest.countDocuments({ room, status: "active" });
+      if (activeCount + guests.length > Number(roomDoc.capacity || 0)) {
+        return response.error(res, "Xonada barcha mijozlar uchun bo'sh joy yo'q");
+      }
+    }
+
+    const normalizedGuests = guests.map((guest) => ({
+      firstname: String(guest.firstname || "").trim(),
+      lastname: String(guest.lastname || "").trim(),
+      passport: String(guest.passport || "").trim(),
+      birthDate: guest.birthDate,
+      phone: String(guest.phone || "").trim(),
+      note: String(guest.note || "").trim(),
+      vip: Boolean(guest.vip),
+    }));
+
+    const passports = normalizedGuests
+      .map((guest) => guest.passport)
+      .filter(Boolean);
+    if (passports.length) {
+      const orConditions = passports.map((passport) => ({
+        passport: { $regex: `^${escapeRegex(passport)}$`, $options: "i" },
+      }));
+      const blacklistedGuest = await Guest.findOne({
+        isBlacklisted: true,
+        $or: orConditions,
+      }).select("_id firstname lastname passport");
+      if (blacklistedGuest) {
+        return response.error(
+          res,
+          "Mijozlardan biri qora ro'yxatda. Qabul qilish mumkin emas",
+        );
+      }
+    }
+
+    const hotelSettings = await getHotelSettings();
+    const acceptedBy = await buildActionBy(req.admin);
+    const baseCheckInAt = isReservation ? bookedForAt : new Date();
+    const billing = buildBillingState(
+      baseCheckInAt,
+      normalizedStayDays,
+      new Date(),
+      hotelSettings,
+    );
+
+    const docs = normalizedGuests.map((guest) => {
+      const isVipRequested = !isReservation && Boolean(guest.vip);
+      return {
+        firstname: guest.firstname,
+        lastname: guest.lastname,
+        passport: guest.passport,
+        birthDate: guest.birthDate,
+        phone: guest.phone,
+        guestType,
+        vip: false,
+        vipRequestStatus: isVipRequested ? "pending" : "none",
+        vipRequestedBy: isVipRequested ? acceptedBy : null,
+        room,
+        stayDays: billing.stayDays,
+        billableDays: billing.billableDays,
+        checkoutReminderAt: billing.checkoutReminderAt,
+        checkoutDueAt: billing.checkoutDueAt,
+        bookedForAt,
+        dailyRate: normalizedDailyRate,
+        totalAmount: normalizedDailyRate * billing.billableDays,
+        paidAmount: 0,
+        debtAmount: isReservation ? 0 : normalizedDailyRate * billing.billableDays,
+        payments: [],
+        status: isReservation ? "booked" : "active",
+        acceptedBy,
+        checkInAt: baseCheckInAt,
+        note: guest.note,
+      };
+    });
+
+    const createdGuests = await Guest.insertMany(docs, { ordered: true });
+    const vipCandidates = createdGuests.filter(
+      (_, index) => !isReservation && Boolean(normalizedGuests[index]?.vip),
+    );
+    if (vipCandidates.length) {
+      await VipRequest.insertMany(
+        vipCandidates.map((guest) => ({
+          guest: guest._id,
+          status: "pending",
+          requestedBy: acceptedBy,
+        })),
+        { ordered: true },
+      );
+      const io = req.app.get("socket");
+      if (io) await emitPendingVipCount(io);
+    }
+
+    if (!isReservation) await syncRoomOccupancy(roomDoc._id);
+
+    emitGuestChanged(req.app.get("socket"), {
+      roomId: String(room || ""),
+      reason: isReservation ? "guest_bulk_booked" : "guest_bulk_created",
+      count: createdGuests.length,
+    });
+
+    const ids = createdGuests.map((item) => item._id);
+    const populatedGuests = await Guest.find({ _id: { $in: ids } }).populate("room");
+
+    return response.created(
+      res,
+      isReservation
+        ? `${createdGuests.length} ta mehmon muvaffaqiyatli bron qilindi`
+        : `${createdGuests.length} ta mehmon muvaffaqiyatli qabul qilindi`,
+      populatedGuests,
     );
   } catch (error) {
     return response.serverError(res, error.message);
@@ -1089,6 +1257,7 @@ const deleteGuest = async (req, res) => {
 
 module.exports = {
   createGuest,
+  createGuestsBulk,
   getGuests,
   getGuestById,
   getGuestByPassport,

@@ -53,7 +53,7 @@ const guestSchema = new mongoose.Schema(
     // Shaxsiy ma'lumotlar
     firstname: { type: String, required: true, trim: true },
     lastname: { type: String, required: true, trim: true },
-    passport: { type: String, required: true, trim: true },
+    passport: { type: String, trim: true, default: "" },
     birthDate: { type: Date, required: true },
     phone: { type: String, trim: true, default: "" },
     guestType: { type: String, enum: ["uzb", "chetellik"], default: "uzb" },
