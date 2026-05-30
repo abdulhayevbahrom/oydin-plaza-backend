@@ -24,7 +24,8 @@ app.use(express.json());
 
 // CORS sozlamalari
 const corsOptions = {
-  origin: ["http://localhost:5173", "https://oydin-plaza.vercel.app"],
+  origin: ["http://localhost:5173", "https://oydin-plaza.vercel.app",  
+    "https://oydin-plaza.my-hning otels.uz"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   credentials: true,
 };
