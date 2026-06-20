@@ -18,6 +18,119 @@ const getMonthBase = (monthQuery) => {
   return moment.tz(TIMEZONE).startOf("month");
 };
 
+const getDailyReport = async (req, res) => {
+  try {
+    const dayStart = moment.tz(TIMEZONE).startOf("day");
+    const nextDayStart = dayStart.clone().add(1, "day");
+    const range = {
+      $gte: dayStart.toDate(),
+      $lt: nextDayStart.toDate(),
+    };
+
+    const [guestPayments, hallPayments, expenses] = await Promise.all([
+      Guest.aggregate([
+        { $unwind: "$payments" },
+        { $match: { "payments.createdAt": range } },
+        {
+          $lookup: {
+            from: "rooms",
+            localField: "room",
+            foreignField: "_id",
+            as: "roomDoc",
+          },
+        },
+        {
+          $unwind: {
+            path: "$roomDoc",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            source: { $literal: "Mehmonxona" },
+            customer: {
+              $trim: {
+                input: {
+                  $concat: [
+                    { $ifNull: ["$firstname", ""] },
+                    " ",
+                    { $ifNull: ["$lastname", ""] },
+                  ],
+                },
+              },
+            },
+            place: { $ifNull: ["$roomDoc.roomNumber", "-"] },
+            amount: { $ifNull: ["$payments.amount", 0] },
+            type: { $ifNull: ["$payments.type", "-"] },
+            note: { $ifNull: ["$payments.note", ""] },
+            createdAt: "$payments.createdAt",
+          },
+        },
+      ]),
+      HallBooking.aggregate([
+        { $unwind: "$payments" },
+        { $match: { "payments.createdAt": range } },
+        {
+          $project: {
+            _id: 0,
+            source: { $literal: "Zal" },
+            customer: {
+              $trim: {
+                input: {
+                  $concat: [
+                    { $ifNull: ["$customerFirstname", ""] },
+                    " ",
+                    { $ifNull: ["$customerLastname", ""] },
+                  ],
+                },
+              },
+            },
+            place: { $ifNull: ["$hallName", "-"] },
+            amount: { $ifNull: ["$payments.amount", 0] },
+            type: { $ifNull: ["$payments.type", "-"] },
+            note: { $ifNull: ["$payments.note", ""] },
+            createdAt: "$payments.createdAt",
+          },
+        },
+      ]),
+      Expense.find({ spentAt: range })
+        .select("title category amount paymentType spentAt note createdBy")
+        .sort({ spentAt: 1, createdAt: 1 })
+        .lean(),
+    ]);
+
+    const payments = [...guestPayments, ...hallPayments].sort(
+      (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+    );
+    const totalPayments = payments.reduce(
+      (sum, item) => sum + Number(item?.amount || 0),
+      0,
+    );
+    const totalExpenses = expenses.reduce(
+      (sum, item) => sum + Number(item?.amount || 0),
+      0,
+    );
+
+    return response.success(res, "Kunlik hisobot ma'lumotlari", {
+      date: dayStart.format("YYYY-MM-DD"),
+      timezone: TIMEZONE,
+      generatedAt: new Date().toISOString(),
+      totals: {
+        paymentsCount: payments.length,
+        paymentsAmount: totalPayments,
+        expensesCount: expenses.length,
+        expensesAmount: totalExpenses,
+        net: totalPayments - totalExpenses,
+      },
+      payments,
+      expenses,
+    });
+  } catch (error) {
+    return response.serverError(res, error.message);
+  }
+};
+
 const getReportsSummary = async (req, res) => {
   try {
     const base = getMonthBase(req.query.month);
@@ -386,5 +499,6 @@ const getReportsSummary = async (req, res) => {
 };
 
 module.exports = {
+  getDailyReport,
   getReportsSummary,
 };

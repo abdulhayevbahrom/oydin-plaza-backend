@@ -378,6 +378,7 @@ const getDashboardSummary = async (req, res) => {
       value: Number(expenseDailyMap.get(index + 1) || 0),
     }));
     const expensesTotal = Number(expensesFacet?.monthlyTotal?.[0]?.total || 0);
+    const todayExpense = Number(expenseDailyMap.get(anchorDayStart.date()) || 0);
     const monthlyChart = {
       labels: Array.from({ length: daysInMonth }, (_, index) => String(index + 1)),
       revenue: monthlySeries.map((item) => Number(item?.value || 0)),
@@ -422,6 +423,8 @@ const getDashboardSummary = async (req, res) => {
         monthRevenue,
         previousMonthRevenue,
         monthChange: formatChange(monthRevenue, previousMonthRevenue),
+        todayExpense,
+        monthExpense: expensesTotal,
         activeGuests: Number(activeGuests || 0),
         bookedGuests: Number(bookedGuests || 0),
         debtorsCount: Number(debtorsAgg?.count || 0),
