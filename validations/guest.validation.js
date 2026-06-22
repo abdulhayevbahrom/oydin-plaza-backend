@@ -19,7 +19,7 @@ const guestBaseProperties = {
 const createGuestSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["firstname", "lastname", "birthDate", "room", "dailyRate", "stayDays"],
+  required: ["firstname", "lastname", "room", "dailyRate", "stayDays"],
   properties: guestBaseProperties,
 };
 
@@ -40,7 +40,7 @@ const createGuestsBulkSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["firstname", "lastname", "birthDate"],
+        required: ["firstname", "lastname"],
         properties: {
           firstname: { type: "string", minLength: 1 },
           lastname: { type: "string", minLength: 1 },
