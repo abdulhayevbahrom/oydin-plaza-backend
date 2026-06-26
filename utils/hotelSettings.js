@@ -6,6 +6,7 @@ const DEFAULT_HOTEL_SETTINGS = {
   reminderTime: "12:00",
   logo: "",
   receiptThankYouText: "Tashrifingiz uchun rahmat! Yana sizni kutib qolamiz.",
+  status: true,
 };
 
 const parseTime = (value) => {

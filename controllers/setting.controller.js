@@ -6,10 +6,15 @@ const {
   parseTime,
 } = require("../utils/hotelSettings");
 
+const hideInternalSettings = (settings) => {
+  const { status, ...publicSettings } = settings || {};
+  return publicSettings;
+};
+
 const getSettings = async (_, res) => {
   try {
     const settings = await getHotelSettings();
-    return response.success(res, "Sozlamalar", settings);
+    return response.success(res, "Sozlamalar", hideInternalSettings(settings));
   } catch (error) {
     return response.serverError(res, error.message);
   }
@@ -49,7 +54,7 @@ const updateSettings = async (req, res) => {
     return response.success(
       res,
       "Sozlamalar yangilandi",
-      { ...DEFAULT_HOTEL_SETTINGS, ...settings },
+      hideInternalSettings({ ...DEFAULT_HOTEL_SETTINGS, ...settings }),
     );
   } catch (error) {
     return response.serverError(res, error.message);

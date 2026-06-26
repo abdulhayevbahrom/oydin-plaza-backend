@@ -10,6 +10,9 @@ const notfound = require("./middleware/notfound.middleware");
 const router = require("./routes/router");
 
 const authMiddleware = require("./middleware/AuthMiddleware");
+const {
+  paymentStatusMiddleware,
+} = require("./middleware/paymentStatus.middleware");
 const { createServer } = require("node:http");
 const { startGuestBillingCron } = require("./jobs/guestBilling.cron");
 
@@ -44,7 +47,7 @@ app.set("socket", io);
 soket.connect(io);
 startGuestBillingCron(io);
 
-app.use("/api", authMiddleware, router); // Routerlarni ulash
+app.use("/api", paymentStatusMiddleware, authMiddleware, router); // Routerlarni ulash
 app.get("/", (req, res) => res.send("Salom dunyo")); // Bosh sahifa
 app.use(notfound); // 404 middleware
 

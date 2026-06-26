@@ -27,6 +27,10 @@ const settingSchema = new mongoose.Schema(
       default: "Tashrifingiz uchun rahmat! Yana sizni kutib qolamiz.",
       trim: true,
     },
+    status: {
+      type: Boolean,
+      default: true,
+    },
   },
   { timestamps: true },
 );
